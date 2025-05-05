@@ -8,7 +8,7 @@
     ],
     "jsx": "preserve",
     "jsxImportSource": "react",
-    "moduleResolution": "node",
+    "moduleResolution": "bundler",
     "esModuleInterop": true,
     "skipLibCheck": true,
     "strict": true,

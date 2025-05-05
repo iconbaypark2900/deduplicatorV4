@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import UploadDropzone from '../core/UploadDropzone';
 import { documentService } from '../../services/documentService';
+import { getAbsoluteApiUrl } from '../../services/baseApi';
 import type { ReviewData, FlaggedPage } from '../../types/review';
 
 interface Props {
@@ -70,6 +71,22 @@ export default function DocumentComparison({ onComplete }: Props) {
     
     try {
       const result = await documentService.compareDocuments(file1, file2);
+      
+      // Fix image URLs - convert relative URLs to absolute URLs
+      if (result.doc1 && result.doc1.pages) {
+        result.doc1.pages = result.doc1.pages.map(page => ({
+          ...page,
+          imageUrl: getAbsoluteApiUrl(page.imageUrl)
+        }));
+      }
+      
+      if (result.doc2 && result.doc2.pages) {
+        result.doc2.pages = result.doc2.pages.map(page => ({
+          ...page,
+          imageUrl: getAbsoluteApiUrl(page.imageUrl)
+        }));
+      }
+      
       setResults(result);
       
       // If onComplete callback is provided, format data for review

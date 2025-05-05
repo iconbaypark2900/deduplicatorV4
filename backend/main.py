@@ -15,10 +15,11 @@ from backend.api.compare import router as compare_router
 from backend.api.documents import router as documents_router
 from backend.api.page import router as page_router
 from backend.api.data_science import router as data_science_router
+from backend.api.analyze import router as analyze_router
 
 # Create the FastAPI application
 app = FastAPI(
-    title="Medical PDF Deduplicator",
+    title="Duplicate Document Detection",
     description="A system for detecting and managing duplicate medical PDFs",
     version="1.0.0"
 )
@@ -44,6 +45,7 @@ app.include_router(compare_router, prefix="/compare")
 app.include_router(documents_router, prefix="/documents")
 app.include_router(page_router, prefix="/page")
 app.include_router(data_science_router, prefix="/data-science")
+app.include_router(analyze_router, prefix="/analyze")
 
 # Mount static file directories for serving images and temp files
 app.mount("/images", StaticFiles(directory="storage/page_images"), name="images")

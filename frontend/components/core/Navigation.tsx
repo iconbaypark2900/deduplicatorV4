@@ -5,6 +5,7 @@ import { ReviewData, ReviewHistoryEntry, WorkflowType } from '../../types/review
 
 // Import analysis components
 import DocumentComparison from '../analysis/DocumentComparison';
+import IntraDocumentComparison from '../analysis/IntraDocumentComparison';
 import SingleDocument from '../analysis/SingleDocument';
 import BatchFolder from '../analysis/BatchFolder';
 
@@ -60,11 +61,8 @@ export default function Navigation() {
       lastReviewer: data.lastReviewer,
       lastReviewedAt: data.lastReviewedAt
     });
-    setActiveTab('compare');
-    // Show review tab
-    setTimeout(() => {
-      document.getElementById('review-tab')?.scrollIntoView({ behavior: 'smooth' });
-    }, 100);
+    setActiveTab('review');
+    // No need to scroll since the entire UI will show the Review tab
   };
 
   // Handler for document actions in review
@@ -102,6 +100,37 @@ export default function Navigation() {
     }
   };
 
+  // Handler for page-level actions in review
+  const handlePageAction = async (pageIndex: number, decision: 'keep' | 'archive') => {
+    try {
+      // API call would go here
+      console.log(`Page at index ${pageIndex} action: ${decision}`);
+
+      // Update review data state to mark the specific page
+      setReviewData(prevData => {
+        if (!prevData) return prevData;
+        
+        // Create a new flagged pages array with the updated status
+        const updatedFlaggedPages = [...prevData.flaggedPages];
+        updatedFlaggedPages[pageIndex] = {
+          ...updatedFlaggedPages[pageIndex],
+          status: decision === 'keep' ? 'kept' : 'archived'
+        };
+        
+        return {
+          ...prevData,
+          flaggedPages: updatedFlaggedPages
+        };
+      });
+
+      // Show success notification
+      alert(`Page ${decision === 'keep' ? 'kept' : 'archived'} successfully`);
+    } catch (error) {
+      console.error('Failed to update page status:', error);
+      alert('Failed to update page status');
+    }
+  };
+
   // Handler for when review is completed
   const handleReviewComplete = () => {
     setReviewData(null);
@@ -114,19 +143,25 @@ export default function Navigation() {
       <div className="border-b border-gray-200 dark:border-gray-800">
         <nav className="flex flex-wrap space-x-2 md:space-x-8" aria-label="Tabs">
           <TabButton
-            label="Document Comparison"
+            label="Documents Comparison"
             active={activeTab === 'compare'}
             onClick={() => setActiveTab('compare')}
           />
           <TabButton
+            label="Intra-Document Comparison"
+            active={activeTab === 'intra-compare'}
+            onClick={() => setActiveTab('intra-compare')}
+          />
+          <TabButton
+            label="Document Folder"
+            active={activeTab === 'batch'}
+            onClick={() => setActiveTab('batch')}
+          />
+          {/* Commented out as requested
+          <TabButton
             label="Single Document"
             active={activeTab === 'single'}
             onClick={() => setActiveTab('single')}
-          />
-          <TabButton
-            label="Batch Folder"
-            active={activeTab === 'batch'}
-            onClick={() => setActiveTab('batch')}
           />
           <TabButton
             label="Medical Analysis"
@@ -143,6 +178,7 @@ export default function Navigation() {
             active={activeTab === 'content'}
             onClick={() => setActiveTab('content')}
           />
+          */}
           {reviewData && (
             <TabButton
               label="Review Results"
@@ -160,9 +196,8 @@ export default function Navigation() {
             onComplete={handleWorkflowComplete} 
           />
         )}
-        {activeTab === 'single' && (
-          <SingleDocument 
-            settings={settings} 
+        {activeTab === 'intra-compare' && (
+          <IntraDocumentComparison 
             onComplete={handleWorkflowComplete} 
           />
         )}
@@ -172,21 +207,35 @@ export default function Navigation() {
             onComplete={handleWorkflowComplete} 
           />
         )}
+        {/* Commented out as requested
+        {activeTab === 'single' && (
+          <SingleDocument 
+            settings={settings} 
+            onComplete={handleWorkflowComplete} 
+          />
+        )}
+        */}
+        {/* Commented out as requested
         {activeTab === 'medical' && (
           <MedicalAnalysis 
             onComplete={handleWorkflowComplete} 
           />
         )}
+        */}
+        {/* Commented out as requested
         {activeTab === 'cluster' && (
           <DocumentClustering 
             onComplete={handleWorkflowComplete} 
           />
         )}
+        */}
+        {/* Commented out as requested
         {activeTab === 'content' && (
           <ContentAnalysis 
             onComplete={handleWorkflowComplete} 
           />
         )}
+        */}
         {activeTab === 'review' && reviewData && (
           <Review
             docId={reviewData.documentId}
@@ -201,30 +250,13 @@ export default function Navigation() {
             lastReviewedAt={reviewData.lastReviewedAt}
             onDocumentAction={handleDocumentAction}
             onComplete={handleReviewComplete}
+            onPageAction={reviewData.workflowType === 'intra-compare' ? handlePageAction : undefined}
           />
         )}
       </div>
 
       {/* Review panel - shown if review data exists */}
-      {reviewData && (
-        <div id="review-tab" className="mt-8 pt-4 border-t border-gray-200 dark:border-gray-800">
-          <h2 className="text-xl font-bold mb-4 dark:text-white">Review Results</h2>
-          <Review
-            docId={reviewData.documentId}
-            filename={reviewData.filename}
-            workflowType={reviewData.workflowType}
-            flaggedPages={reviewData.flaggedPages}
-            medicalConfidence={reviewData.medicalConfidence || 0}
-            duplicateConfidence={reviewData.duplicateConfidence || 0}
-            status={reviewData.status}
-            reviewHistory={reviewData.reviewHistory}
-            lastReviewer={reviewData.lastReviewer}
-            lastReviewedAt={reviewData.lastReviewedAt}
-            onDocumentAction={handleDocumentAction}
-            onComplete={handleReviewComplete}
-          />
-        </div>
-      )}
+      {/* Removed to ensure Review results only show in the Review Results tab */}
     </div>
   );
 }

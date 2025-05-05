@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import UploadDropzone from '../core/UploadDropzone';
 import { documentService } from '../../services/documentService';
+import { getAbsoluteApiUrl } from '../../services/baseApi';
 import { UploadResponse, PageMetadata, DuplicateMatch } from '../../types/document';
 import { ReviewData } from '../../types/review';
 
@@ -30,21 +31,43 @@ export default function SingleDocument({ settings, onComplete }: Props) {
     setError(null);
     
     try {
+      // First get basic document data
       const result = await documentService.uploadDocument(file);
-      setResults(result);
+      
+      // Add direct image URLs to each page using the same endpoint that works in the Review modal
+      // This mirrors how DocumentComparison processes image URLs
+      const enhancedResult: UploadResponse = {
+        ...result,
+        pages: result.pages.map(page => ({
+          ...page,
+          imageUrl: getAbsoluteApiUrl(`/page/${page.page_hash}/image`)
+        }))
+      };
+      
+      setResults(enhancedResult);
       
       // If onComplete callback is provided, format data for review
       if (onComplete && result.duplicates && result.duplicates.length > 0) {
-        const flaggedPages = result.duplicates.map(dup => ({
-          pageNumber: dup.page1_idx + 1,
-          pageHash: result.pages[dup.page1_idx].page_hash,
-          similarity: dup.similarity,
-          matchedPage: {
-            pageNumber: dup.page2_idx + 1,
-            documentId: result.doc_id,
-            filename: file.name
-          }
-        }));
+        const flaggedPages = result.duplicates.map(dup => {
+          // Store the image URLs directly in the flagged pages
+          // This is similar to how DocumentComparison attaches image URLs
+          const page1 = result.pages[dup.page1_idx];
+          const page2 = result.pages[dup.page2_idx];
+          
+          return {
+            pageNumber: dup.page1_idx + 1,
+            pageHash: page1.page_hash,
+            similarity: dup.similarity,
+            imageUrl: getAbsoluteApiUrl(`/page/${page1.page_hash}/image`),
+            matchedPage: {
+              pageNumber: dup.page2_idx + 1,
+              documentId: result.doc_id,
+              filename: file.name,
+              pageHash: page2.page_hash,
+              imageUrl: getAbsoluteApiUrl(`/page/${page2.page_hash}/image`)
+            }
+          };
+        });
         
         onComplete({
           documentId: result.doc_id,
@@ -156,15 +179,29 @@ export default function SingleDocument({ settings, onComplete }: Props) {
                     
                     {selectedDuplicate === dup && (
                       <div className="mt-4 grid grid-cols-2 gap-4">
-                        <div className="border border-gray-700 rounded-lg p-3 bg-gray-800">
-                          <h5 className="text-sm font-medium mb-2">Page {dup.page1_idx + 1}</h5>
-                          <p className="text-xs text-gray-300">
+                        <div className="border border-gray-700 rounded-lg overflow-hidden">
+                          <h5 className="text-sm font-medium p-2 bg-gray-800">Page {dup.page1_idx + 1}</h5>
+                          <div className="border-t border-b border-gray-700">
+                            <img 
+                              src={results.pages[dup.page1_idx]?.imageUrl} 
+                              alt={`Page ${dup.page1_idx + 1}`}
+                              className="w-full h-auto"
+                            />
+                          </div>
+                          <p className="text-xs text-gray-300 p-2">
                             {results.pages[dup.page1_idx]?.text_snippet || "No preview available"}
                           </p>
                         </div>
-                        <div className="border border-gray-700 rounded-lg p-3 bg-gray-800">
-                          <h5 className="text-sm font-medium mb-2">Page {dup.page2_idx + 1}</h5>
-                          <p className="text-xs text-gray-300">
+                        <div className="border border-gray-700 rounded-lg overflow-hidden">
+                          <h5 className="text-sm font-medium p-2 bg-gray-800">Page {dup.page2_idx + 1}</h5>
+                          <div className="border-t border-b border-gray-700">
+                            <img 
+                              src={results.pages[dup.page2_idx]?.imageUrl} 
+                              alt={`Page ${dup.page2_idx + 1}`}
+                              className="w-full h-auto"
+                            />
+                          </div>
+                          <p className="text-xs text-gray-300 p-2">
                             {results.pages[dup.page2_idx]?.text_snippet || "No preview available"}
                           </p>
                         </div>
@@ -188,10 +225,10 @@ export default function SingleDocument({ settings, onComplete }: Props) {
                   false;
                 
                 return (
-                  <div key={idx} className={`border rounded-lg p-3 ${
+                  <div key={idx} className={`border rounded-lg overflow-hidden ${
                     isDuplicate ? 'border-red-500 bg-red-900/20' : 'border-gray-700 bg-gray-900'
                   }`}>
-                    <div className="flex justify-between items-center mb-2">
+                    <div className="flex justify-between items-center p-2">
                       <h4 className="font-medium">Page {page.page_num}</h4>
                       {isDuplicate && (
                         <span className="text-xs bg-red-500 text-white px-2 py-1 rounded-full">
@@ -199,11 +236,22 @@ export default function SingleDocument({ settings, onComplete }: Props) {
                         </span>
                       )}
                     </div>
-                    <p className="text-xs text-gray-300 h-20 overflow-hidden">
-                      {page.text_snippet || "No preview available"}
-                    </p>
-                    <div className="mt-2 text-xs text-gray-500 truncate">
-                      Hash: {page.page_hash.substring(0, 12)}...
+                    
+                    <div className="border-t border-b border-gray-700">
+                      <img 
+                        src={page.imageUrl} 
+                        alt={`Page ${page.page_num}`}
+                        className="w-full h-auto"
+                      />
+                    </div>
+                    
+                    <div className="p-2">
+                      <p className="text-xs text-gray-300 max-h-20 overflow-hidden">
+                        {page.text_snippet || "No preview available"}
+                      </p>
+                      <div className="mt-2 text-xs text-gray-500 truncate">
+                        Hash: {page.page_hash.substring(0, 12)}...
+                      </div>
                     </div>
                   </div>
                 );

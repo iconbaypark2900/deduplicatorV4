@@ -52,6 +52,7 @@ export interface PageInfo {
     reviewed_at?: string;
     filename?: string;
     doc_id?: string;
+    imageUrl?: string;
   }
   
   export interface MatchDetails {

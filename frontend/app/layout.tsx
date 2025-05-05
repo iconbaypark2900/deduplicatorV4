@@ -15,8 +15,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Medical PDF Deduplicator",
-  description: "A system for detecting and managing duplicate medical PDFs",
+  title: "Document Deduplication System",
+  description: "A system for detecting and managing duplicate documents",
 };
 
 export default function RootLayout({
@@ -32,14 +32,14 @@ export default function RootLayout({
         <div className="min-h-screen flex flex-col">
           <header className="bg-black text-white p-4 shadow">
             <div className="container mx-auto">
-              <h1 className="text-xl font-bold">Medical PDF Deduplicator</h1>
+              <h1 className="text-xl font-bold">Document Deduplication System</h1>
             </div>
           </header>
           <main className="flex-grow container mx-auto p-4 md:p-6">
             {children}
           </main>
           <footer className="bg-black text-gray-400 p-4 text-center text-sm">
-            <p>© {new Date().getFullYear()} Medical PDF Deduplicator</p>
+            <p>© {new Date().getFullYear()} Document Deduplication System</p>
           </footer>
         </div>
       </body>

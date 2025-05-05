@@ -94,8 +94,24 @@ export const documentService = {
     formData.append('file1', file1);
     formData.append('file2', file2);
     
-    const response = await api.post('/upload/compare', formData, {
+    const response = await api.post('/compare', formData, {
       headers: { 'Content-Type': 'multipart/form-data' }
+    });
+    
+    return response.data;
+  },
+  
+  /**
+   * Analyze a single document for internal page similarities
+   */
+  async analyzeIntraDocument(file: File, threshold: number): Promise<any> {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('threshold', threshold.toString());
+    
+    const response = await api.post('/analyze/intra-document', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 300000 // 5 minutes timeout for large documents
     });
     
     return response.data;
@@ -162,7 +178,7 @@ export async function comparePair(fileA: File, fileB: File) {
   form.append("file1", fileA);
   form.append("file2", fileB);
   
-  const { data } = await api.post("/upload/compare", form, {
+  const { data } = await api.post("/compare", form, {
     headers: { "Content-Type": "multipart/form-data" }
   });
   

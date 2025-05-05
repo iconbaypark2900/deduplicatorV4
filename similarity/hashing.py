@@ -6,7 +6,7 @@ Provides functions for various hashing strategies.
 import hashlib
 import re
 import os
-from typing import List, Dict, Optional, Set, Tuple
+from typing import List, Dict, Optional, Set, Tuple, Any
 import logging
 from datasketch import MinHash, MinHashLSH
 

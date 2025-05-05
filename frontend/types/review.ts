@@ -5,6 +5,7 @@
 
 export type WorkflowType =
   | 'compare'
+  | 'intra-compare'
   | 'single'
   | 'batch'
   | 'medical'
@@ -20,6 +21,8 @@ export interface MatchedPage {
   pageNumber: number;
   documentId: string;
   filename: string;
+  pageHash?: string;
+  imageUrl?: string;
 }
 
 export interface FlaggedPage {
@@ -27,6 +30,8 @@ export interface FlaggedPage {
   pageHash: string;
   similarity: number;
   matchedPage: MatchedPage;
+  imageUrl?: string;
+  status?: 'pending' | 'kept' | 'archived';
 }
 
 export interface ReviewHistoryEntry {

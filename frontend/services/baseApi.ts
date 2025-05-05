@@ -44,3 +44,15 @@ api.interceptors.response.use(
     return Promise.reject(customError);
   }
 );
+
+/**
+ * Get absolute URL for resources like images
+ * @param relativePath - The relative path from the backend API
+ * @returns The absolute URL for the resource
+ */
+export const getAbsoluteApiUrl = (relativePath: string): string => {
+  const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+  // Ensure the relativePath starts with a slash
+  const formattedPath = relativePath.startsWith('/') ? relativePath : `/${relativePath}`;
+  return `${baseUrl}${formattedPath}`;
+};
