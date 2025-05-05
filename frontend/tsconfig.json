@@ -1,0 +1,19 @@
+{
+    "compilerOptions": {
+      "target": "esnext",
+      "lib": ["dom","dom.iterable","esnext"],
+      "jsx": "react-jsx",
+      "jsxImportSource": "react",
+      "moduleResolution": "node",
+      "esModuleInterop": true,
+      "skipLibCheck": true,
+      "strict": true,
+      "baseUrl": ".",                  
+      "paths": {
+        "@/*": ["frontend/*"]          
+      },
+      "types": ["node", "react"]                
+    },
+    "include": ["frontend","next-env.d.ts"],
+    "exclude": ["node_modules"]
+  }
