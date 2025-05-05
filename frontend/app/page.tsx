@@ -1,6 +1,7 @@
 'use client';
 
-import Navigation from '@/components/core/Navigation';
+import React from 'react';
+import Navigation from '../components/core/Navigation';
 
 export default function Home() {
   return (

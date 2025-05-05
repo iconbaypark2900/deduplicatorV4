@@ -25,12 +25,14 @@ export default function DocumentClustering({ onComplete }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   
   // Handle file upload and clustering
-  const handleUpload = async (files: File[]) => {
+  const handleUpload = async (files: File | File[]) => {
     setIsLoading(true);
     setError(null);
     
+    const docs = Array.isArray(files) ? files : [files];
+    
     try {
-      const clusteringResult = await dataScienceService.clusterDocuments(files);
+      const clusteringResult = await dataScienceService.clusterDocuments(docs);
       setResult(clusteringResult);
       
       if (clusteringResult.visualization_url) {
@@ -231,7 +233,7 @@ export default function DocumentClustering({ onComplete }: Props) {
     const yScale = (canvas.height - padding * 2) / (maxY - minY || 1);
     
     // Check if mouse is over any node
-    let hoveredNodeId = null;
+    let hoveredNodeId: string | null = null;
     
     for (const node of result.nodes) {
       const nodeX = (node.x - minX) * xScale + padding;

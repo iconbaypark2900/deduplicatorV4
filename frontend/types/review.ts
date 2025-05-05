@@ -3,7 +3,14 @@
  * These types support the human review workflow.
  */
 
-export type WorkflowType = 'compare' | 'single' | 'batch' | 'medical' | 'cluster' | 'content';
+export type WorkflowType =
+  | 'compare'
+  | 'single'
+  | 'batch'
+  | 'medical'
+  | 'cluster'
+  | 'content'
+  | 'review';
 
 export type ReviewStatus = 'pending' | 'reviewed' | 'archived';
 

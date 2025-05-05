@@ -3,7 +3,7 @@
 import React, { useState } from 'react';
 import UploadDropzone from '../core/UploadDropzone';
 import { documentService } from '../../services/documentService';
-import { ReviewData } from '../../types/review';
+import type { ReviewData, FlaggedPage } from '../../types/review';
 
 interface Props {
   onComplete?: (data: ReviewData) => void;
@@ -43,14 +43,16 @@ export default function DocumentComparison({ onComplete }: Props) {
   const [currentPagePair, setCurrentPagePair] = useState<number>(0);
 
   // Handle first file upload
-  const handleFile1Upload = (file: File) => {
+  const handleFile1Upload = (files: File | File[]) => {
+    const file = Array.isArray(files) ? files[0] : files;
     setFile1(file);
     setResults(null);
     setError(null);
   };
 
   // Handle second file upload
-  const handleFile2Upload = (file: File) => {
+  const handleFile2Upload = (files: File | File[]) => {
+    const file = Array.isArray(files) ? files[0] : files;
     setFile2(file);
     setResults(null);
     setError(null);
@@ -73,7 +75,7 @@ export default function DocumentComparison({ onComplete }: Props) {
       // If onComplete callback is provided, format data for review
       if (onComplete && result) {
         // Create flagged pages array from similar pages
-        const flaggedPages = [];
+        const flaggedPages: FlaggedPage[] = [];
         
         for (let i = 0; i < result.doc1.pages.length; i++) {
           if (result.doc1.pages[i].similarity > 0.7) {

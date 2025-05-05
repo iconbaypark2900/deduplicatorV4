@@ -20,7 +20,9 @@ export default function MedicalAnalysis({ onComplete }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   // Handle file upload and medical analysis
-  const handleUpload = async (file: File) => {
+  const handleUpload = async (files: File | File[]) => {
+    const file = Array.isArray(files) ? files[0] : files;
+
     setIsLoading(true);
     setError(null);
     

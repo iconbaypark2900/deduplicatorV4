@@ -4,7 +4,7 @@ import React, { useState } from 'react';
 import UploadDropzone from '../core/UploadDropzone';
 import { documentService } from '../../services/documentService';
 import { BatchFolderResponse, BatchFolderResult } from '../../types/document';
-import { ReviewData } from '../../types/review';
+import type { ReviewData, FlaggedPage } from '../../types/review';
 
 interface Props {
   settings: {
@@ -24,18 +24,20 @@ export default function BatchFolder({ settings, onComplete }: Props) {
   const [expandedResult, setExpandedResult] = useState<number | null>(null);
 
   // Handle file upload and batch analysis
-  const handleUpload = async (files: File[]) => {
+  const handleUpload = async (files: File | File[]) => {
+    const batchFiles: File[] = Array.isArray(files) ? files : [files];
+
     setIsLoading(true);
     setError(null);
     
     try {
-      const result = await documentService.analyzeBatchFolder(files, settings);
+      const result = await documentService.analyzeBatchFolder(batchFiles, settings);
       setResults(result);
       
       // If onComplete callback is provided, format data for review
       if (onComplete) {
         // Create flagged pages array from similar pages
-        const flaggedPages = [];
+        const flaggedPages: FlaggedPage[] = [];
         
         for (let i = 0; i < result.results.length; i++) {
           flaggedPages.push({

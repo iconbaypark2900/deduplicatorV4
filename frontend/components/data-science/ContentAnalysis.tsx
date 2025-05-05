@@ -22,12 +22,14 @@ export default function ContentAnalysis({ onComplete }: Props) {
   const [reportUrl, setReportUrl] = useState<string | null>(null);
 
   // Handle file upload and content analysis
-  const handleUpload = async (files: File[]) => {
+  const handleUpload = async (files: File | File[]) => {
+    const docs = Array.isArray(files) ? files : [files];
+
     setIsLoading(true);
     setError(null);
     
     try {
-      const analysisResult = await dataScienceService.analyzeContent(files);
+      const analysisResult = await dataScienceService.analyzeContent(docs);
       setResult(analysisResult);
       
       if (analysisResult.report_url) {

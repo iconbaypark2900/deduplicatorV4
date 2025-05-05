@@ -1,0 +1,13 @@
+/* Styles for diff viewer (placeholder) */
+
+.added {
+  background-color: #e6ffed;
+}
+
+.removed {
+  background-color: #ffeef0;
+}
+
+.modified {
+  background-color: #fff5b1;
+} 

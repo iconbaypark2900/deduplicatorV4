@@ -24,7 +24,8 @@ export default function SingleDocument({ settings, onComplete }: Props) {
   const [selectedDuplicate, setSelectedDuplicate] = useState<DuplicateMatch | null>(null);
 
   // Handle file upload and analysis
-  const handleUpload = async (file: File) => {
+  const handleUpload = async (files: File | File[]) => {
+    const file = Array.isArray(files) ? files[0] : files;
     setIsLoading(true);
     setError(null);
     

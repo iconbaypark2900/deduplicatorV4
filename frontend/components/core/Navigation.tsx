@@ -74,8 +74,9 @@ export default function Navigation() {
       console.log(`Document ${documentId} action: ${decision}`, notes);
 
       // Update review data state
-      setReviewData(prev => {
-        if (!prev) return prev;
+      setReviewData(prevData => {
+        if (!prevData) return prevData;
+        
         const newEntry: ReviewHistoryEntry = {
           status: decision === 'keep' ? 'reviewed' : 'archived',
           decision: decision,
@@ -83,30 +84,11 @@ export default function Navigation() {
           timestamp: new Date().toISOString(),
           notes: notes
         };
-        return {
-          ...prev,
-          status: decision === 'keep' ? 'reviewed' : 'archived',
-          reviewHistory: [...prev.reviewHistory, newEntry],
-          lastReviewer: 'current_user',
-          lastReviewedAt: new Date().toISOString()
-        };
-      });
-        
-        const newReviewHistory = [
-          ...(prev.reviewHistory || []),
-          {
-            status: decision === 'keep' ? 'reviewed' : 'archived',
-            decision: decision,
-            reviewer: 'current_user', // This would come from auth
-            timestamp: new Date().toISOString(),
-            notes: notes
-          }
-        ];
         
         return {
-          ...prev,
+          ...prevData,
           status: decision === 'keep' ? 'reviewed' : 'archived',
-          reviewHistory: newReviewHistory,
+          reviewHistory: [...prevData.reviewHistory, newEntry],
           lastReviewer: 'current_user',
           lastReviewedAt: new Date().toISOString()
         };
