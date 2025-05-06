@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { getAbsoluteApiUrl } from '../../services/baseApi';
 import { ReviewData, WorkflowType, ReviewStatus, ReviewDecision, ReviewHistoryEntry, FlaggedPage } from '../../types/review';
+import DirectImageDisplay from '../core/DirectImageDisplay';
 
 interface ReviewProps {
   docId: string;
@@ -15,6 +16,7 @@ interface ReviewProps {
   reviewHistory: ReviewHistoryEntry[];
   lastReviewer?: string;
   lastReviewedAt?: string;
+  totalPages?: number;
   onDocumentAction: (documentId: string, decision: ReviewDecision, notes?: string) => void;
   onPageAction?: (pageIndex: number, decision: 'keep' | 'archive') => void;
   onComplete?: () => void;
@@ -35,6 +37,7 @@ export default function Review({
   reviewHistory,
   lastReviewer,
   lastReviewedAt,
+  totalPages,
   onDocumentAction,
   onPageAction,
   onComplete
@@ -42,6 +45,7 @@ export default function Review({
   const [notes, setNotes] = useState("");
   const [selectedPage, setSelectedPage] = useState<number | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [uniquePages, setUniquePages] = useState<Array<{pageNumber: number, pageHash: string, status?: 'pending' | 'kept' | 'archived', imageUrl?: string}>>([]);
   
   // Log flaggedPages when component mounts or when they change
   useEffect(() => {
@@ -57,6 +61,54 @@ export default function Review({
       console.log('MatchedPages have imageUrl properties:', hasMatchedImageUrls);
     }
   }, [flaggedPages, workflowType]);
+  
+  // Find unique pages - those not in the flagged pages list
+  useEffect(() => {
+    // Get document's total pages - either from flagged pages or props
+    if (flaggedPages && flaggedPages.length > 0) {
+      // If we have flagged pages, find pages that aren't flagged
+      const flaggedPageNumbers = flaggedPages.map(page => page.pageNumber);
+      // Get the total document pages either from props or infer from flagged pages
+      const inferredTotalPages = Math.max(...flaggedPageNumbers);
+      const documentTotalPages = totalPages || inferredTotalPages;
+      
+      // Find all page numbers that are in flaggedPages
+      const flaggedPageNumbersSet = new Set(flaggedPageNumbers);
+      
+      // Create an array of pages that aren't in flaggedPages
+      const nonFlaggedPages = [];
+      for (let i = 1; i <= documentTotalPages; i++) {
+        if (!flaggedPageNumbersSet.has(i)) {
+          nonFlaggedPages.push({
+            pageNumber: i,
+            pageHash: `${docId}_page${i}`, // Simplified hash
+            status: undefined
+          });
+        }
+      }
+      
+      setUniquePages(nonFlaggedPages);
+    } else {
+      // If there are no flagged pages at all, we need to handle that case
+      // For documents with no duplicates, show all pages as unique if totalPages is provided
+      if (workflowType === 'intra-compare' && totalPages) {
+        const allUniquePages = [];
+        for (let i = 1; i <= totalPages; i++) {
+          allUniquePages.push({
+            pageNumber: i,
+            pageHash: `${docId}_page${i}`,
+            status: undefined
+          });
+        }
+        
+        setUniquePages(allUniquePages);
+      } else {
+        // No flagged pages and no totalPages prop means we don't know how many pages there are
+        // Reset uniquePages to empty array
+        setUniquePages([]);
+      }
+    }
+  }, [flaggedPages, docId, workflowType, totalPages]);
   
   // Format date for display
   const formatDate = (dateString?: string) => {
@@ -76,6 +128,46 @@ export default function Review({
       console.error("Error during review action:", error);
     } finally {
       setIsProcessing(false);
+    }
+  };
+
+  // Handle unique page action
+  const handleUniquePageAction = (pageIndex: number, decision: 'keep' | 'archive') => {
+    // Update the status in the local state
+    setUniquePages(prev => {
+      const updated = [...prev];
+      updated[pageIndex] = {
+        ...updated[pageIndex],
+        status: decision === 'keep' ? 'kept' : 'archived'
+      };
+      return updated;
+    });
+    
+    // If there's an onPageAction handler, call it with a special flag or mapping
+    if (onPageAction) {
+      // You might need to adapt this based on how your backend handles unique pages
+      onPageAction(-1 - pageIndex, decision); // Using negative indices to indicate unique pages
+    }
+  };
+  
+  // Handle the keep action with auto-archive of matching page
+  const handleKeepWithMatchArchive = (pageIndex: number) => {
+    if (!onPageAction) return;
+    
+    const page = flaggedPages[pageIndex];
+    
+    // Find the matched page index
+    const matchedPageIdx = flaggedPages.findIndex(p => 
+      p.pageNumber === page.matchedPage.pageNumber && 
+      p.matchedPage.pageNumber === page.pageNumber
+    );
+    
+    // Keep the current page
+    onPageAction(pageIndex, 'keep');
+    
+    // Archive the matched page if found
+    if (matchedPageIdx !== -1) {
+      onPageAction(matchedPageIdx, 'archive');
     }
   };
   
@@ -175,27 +267,8 @@ export default function Review({
       <div className="bg-black text-white rounded-lg p-6">
         <h2 className="text-lg font-bold mb-4">Document Confidence</h2>
         
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {/* Medical Confidence */}
-          {medicalConfidence > 0 && (
             <div>
-              <div className="flex justify-between items-center mb-2">
-                <span className="text-gray-400">Medical Document Likelihood</span>
-                <span className="text-white font-medium">{(medicalConfidence * 100).toFixed(0)}%</span>
-              </div>
-              <div className="w-full bg-gray-700 rounded-full h-3">
-                <div 
-                  className={`h-3 rounded-full ${
-                    medicalConfidence > 0.7 ? 'bg-green-500' : 
-                    medicalConfidence > 0.4 ? 'bg-yellow-500' : 'bg-red-500'
-                  }`}
-                  style={{ width: `${(medicalConfidence * 100).toFixed(0)}%` }}
-                ></div>
-              </div>
-            </div>
-          )}
-          
-          {/* Duplicate Confidence */}
+          {/* Only include Duplicate Confidence - Medical score removed */}
           {duplicateConfidence > 0 && (
             <div>
               <div className="flex justify-between items-center mb-2">
@@ -219,7 +292,9 @@ export default function Review({
       {/* Flagged Pages */}
       {flaggedPages && flaggedPages.length > 0 && (
         <div className="bg-black text-white rounded-lg p-6">
-          <h2 className="text-lg font-bold mb-4">Flagged Pages</h2>
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="text-lg font-bold">Flagged Pages</h2>
+          </div>
           
           <div className="space-y-4">
             {flaggedPages.map((page, idx) => (
@@ -244,22 +319,6 @@ export default function Review({
                     )}
                   </div>
                   <div className="flex space-x-2">
-                    {workflowType === 'intra-compare' && onPageAction && !page.status && (
-                      <>
-                        <button 
-                          onClick={() => onPageAction(idx, 'archive')}
-                          className="bg-red-600 hover:bg-red-700 text-white text-sm px-3 py-1 rounded transition-colors"
-                        >
-                          Archive
-                        </button>
-                        <button 
-                          onClick={() => onPageAction(idx, 'keep')}
-                          className="bg-green-600 hover:bg-green-700 text-white text-sm px-3 py-1 rounded transition-colors"
-                        >
-                          Keep
-                        </button>
-                      </>
-                    )}
                     <button 
                       onClick={() => setSelectedPage(idx)}
                       className="bg-blue-600 hover:bg-blue-700 text-white text-sm px-3 py-1 rounded transition-colors"
@@ -273,6 +332,65 @@ export default function Review({
           </div>
         </div>
       )}
+
+      {/* Unique Pages */}
+      {uniquePages && uniquePages.length > 0 ? (
+        <div className="bg-black text-white rounded-lg p-6 mt-6">
+          <h2 className="text-lg font-bold mb-4">Unique Pages</h2>
+          <div className="flex flex-wrap">
+            {uniquePages.map((page, idx) => (
+              <div 
+                key={idx} 
+                className={`m-2 p-2 border rounded-lg cursor-pointer transition-colors ${
+                  page.status === 'kept' ? 'border-green-500 bg-green-900 bg-opacity-20' :
+                  page.status === 'archived' ? 'border-red-500 bg-red-900 bg-opacity-20' :
+                  'border-gray-700 hover:border-blue-500'
+                }`}
+                onClick={() => setSelectedPage(-1 - idx)}
+              >
+                <div className="relative w-32 h-40 overflow-hidden bg-gray-800 rounded">
+                  <div className="absolute inset-0 flex items-center justify-center text-gray-600">
+                    {page.imageUrl ? (
+                      <DirectImageDisplay 
+                        pageNumber={page.pageNumber}
+                        alt={`Page ${page.pageNumber}`}
+                        className="w-full h-full object-contain"
+                      />
+                    ) : workflowType === 'intra-compare' ? (
+                      <DirectImageDisplay 
+                        pageNumber={page.pageNumber}
+                        alt={`Page ${page.pageNumber}`}
+                      />
+                    ) : (
+                      <div className="text-center text-gray-500">Page {page.pageNumber}</div>
+                    )}
+                  </div>
+                </div>
+                <div className="mt-2 text-center text-sm">
+                  <div>Page {page.pageNumber}</div>
+                  {page.status && (
+                    <span className={`inline-block px-1.5 text-xs rounded ${
+                      page.status === 'kept' ? 'bg-green-800 text-green-100' : 'bg-red-800 text-red-100'
+                    }`}>
+                      {page.status === 'kept' ? 'Kept' : 'Archived'}
+                    </span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : totalPages && uniquePages ? (
+        <div className="bg-black text-white rounded-lg p-6 mt-6">
+          <h2 className="text-lg font-bold mb-4">Unique Pages</h2>
+          <div className="bg-gray-900 p-4 rounded-lg">
+            <p className="text-sm text-yellow-400">
+              No unique pages to display. To show unique pages for documents with no duplicates, 
+              please provide the total page count through the totalPages prop.
+            </p>
+          </div>
+        </div>
+      ) : null}
 
       {/* Review History */}
       {reviewHistory && reviewHistory.length > 0 && (
@@ -423,7 +541,7 @@ export default function Review({
       {/* Page Details Modal */}
       {selectedPage !== null && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-50">
-          <div className="bg-gray-900 rounded-lg p-6 max-w-2xl w-full">
+          <div className="bg-gray-900 rounded-lg p-6 w-4/5 max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center mb-4">
               <h3 className="text-lg font-bold text-white">
                 Page Details
@@ -438,160 +556,276 @@ export default function Review({
               </button>
             </div>
             
-            <div className="grid grid-cols-2 gap-4">
-              <div className="bg-gray-800 rounded-lg overflow-hidden">
-                <h4 className="font-medium text-white p-2 border-b border-gray-700">
-                  Page {flaggedPages[selectedPage].pageNumber}
-                </h4>
-                <div className="p-4">
-                  <div className="border border-gray-700 rounded mb-3 overflow-hidden">
-                    <div id="page1-image-container" className="min-h-[200px] flex items-center justify-center">
-                      {(flaggedPages[selectedPage] as any).imageUrl ? (
-                        <img 
-                          src={(flaggedPages[selectedPage] as any).imageUrl}
-                          alt={`Page ${flaggedPages[selectedPage].pageNumber}`}
-                          className="w-full h-auto"
-                        />
-                      ) : workflowType === 'compare' ? (
-                        <img 
-                          src={getAbsoluteApiUrl(`/compare/tmp/doc1_page${flaggedPages[selectedPage].pageNumber - 1}_*.png`)}
-                          alt={`Page ${flaggedPages[selectedPage].pageNumber}`}
-                          className="w-full h-auto"
-                          onError={() => {
-                            document.getElementById('page1-image-container')!.innerHTML = 
-                              '<div class="p-4 text-center text-gray-400">No image available</div>';
-                          }}
-                        />
-                      ) : workflowType === 'intra-compare' ? (
-                        <img 
-                          src={getAbsoluteApiUrl(`/temp/page${flaggedPages[selectedPage].pageNumber}_*.png`)}
-                          alt={`Page ${flaggedPages[selectedPage].pageNumber}`}
-                          className="w-full h-auto"
-                          onError={() => {
-                            document.getElementById('page1-image-container')!.innerHTML = 
-                              '<div class="p-4 text-center text-gray-400">No image available</div>';
-                          }}
-                        />
-                      ) : (
-                        <img 
-                          src={getAbsoluteApiUrl(`/page/${flaggedPages[selectedPage].pageHash}/image`)}
-                          alt={`Page ${flaggedPages[selectedPage].pageNumber}`}
-                          className="w-full h-auto"
-                          onError={() => {
-                            document.getElementById('page1-image-container')!.innerHTML = 
-                              '<div class="p-4 text-center text-gray-400">No image available</div>';
-                          }}
-                        />
-                      )}
+            {selectedPage >= 0 ? (
+              // Flagged page view (with comparison)
+              <div className="grid grid-cols-2 gap-4">
+                <div className="bg-gray-800 rounded-lg overflow-hidden">
+                  <h4 className="font-medium text-white p-2 border-b border-gray-700">
+                    Page {flaggedPages[selectedPage].pageNumber}
+                  </h4>
+                  <div className="p-4">
+                    <div className="border border-gray-700 rounded mb-3 overflow-hidden">
+                      <div id="page1-image-container" className="min-h-[200px] flex items-center justify-center">
+                        {(flaggedPages[selectedPage] as any).imageUrl ? (
+                          <DirectImageDisplay 
+                            pageNumber={flaggedPages[selectedPage].pageNumber}
+                            alt={`Page ${flaggedPages[selectedPage].pageNumber}`}
+                            className="w-full h-auto"
+                          />
+                        ) : workflowType === 'compare' ? (
+                          <DirectImageDisplay 
+                            pageNumber={flaggedPages[selectedPage].pageNumber}
+                            alt={`Page ${flaggedPages[selectedPage].pageNumber}`}
+                            className="w-full h-auto"
+                          />
+                        ) : workflowType === 'intra-compare' ? (
+                          <DirectImageDisplay 
+                            pageNumber={flaggedPages[selectedPage].pageNumber}
+                            alt={`Page ${flaggedPages[selectedPage].pageNumber}`}
+                          />
+                        ) : (
+                          <DirectImageDisplay 
+                            pageNumber={flaggedPages[selectedPage].pageNumber}
+                            alt={`Page ${flaggedPages[selectedPage].pageNumber}`}
+                            className="w-full h-auto"
+                          />
+                        )}
+                      </div>
                     </div>
+                    <p className="text-sm text-gray-300">
+                      Hash: {flaggedPages[selectedPage].pageHash.substring(0, 10)}...
+                    </p>
+                    
+                    {/* Add Keep button under this page */}
+                    {workflowType === 'intra-compare' && onPageAction && !flaggedPages[selectedPage].status && (
+                      <div className="mt-4">
+                        <button 
+                          onClick={() => {
+                            if (window.confirm(`Are you sure you want to keep page ${flaggedPages[selectedPage].pageNumber} and archive page ${flaggedPages[selectedPage].matchedPage.pageNumber}?`)) {
+                              // Find the matched page index
+                              const matchedPageIdx = flaggedPages.findIndex(p => 
+                                p.pageNumber === flaggedPages[selectedPage].matchedPage.pageNumber && 
+                                p.matchedPage.pageNumber === flaggedPages[selectedPage].pageNumber
+                              );
+                              
+                              // Keep this page and archive the matched page
+                              onPageAction(selectedPage, 'keep');
+                              if (matchedPageIdx !== -1) {
+                                onPageAction(matchedPageIdx, 'archive');
+                              }
+                              setSelectedPage(null);
+                            }
+                          }}
+                          className="w-full py-2 px-4 bg-green-600 rounded-lg text-white hover:bg-green-700 transition-colors"
+                        >
+                          Keep This Page
+                        </button>
+                      </div>
+                    )}
                   </div>
-                  <p className="text-sm text-gray-300">
-                    Hash: {flaggedPages[selectedPage].pageHash.substring(0, 10)}...
-                  </p>
+                </div>
+                
+                <div className="bg-gray-800 rounded-lg overflow-hidden">
+                  <h4 className="font-medium text-white p-2 border-b border-gray-700">
+                    Similar Page {flaggedPages[selectedPage].matchedPage.pageNumber}
+                  </h4>
+                  <div className="p-4">
+                    <div className="border border-gray-700 rounded mb-3 overflow-hidden">
+                      <div id="page2-image-container" className="min-h-[200px] flex items-center justify-center">
+                        {(flaggedPages[selectedPage].matchedPage as any).imageUrl ? (
+                          <DirectImageDisplay 
+                            pageNumber={flaggedPages[selectedPage].matchedPage.pageNumber}
+                            alt={`Page ${flaggedPages[selectedPage].matchedPage.pageNumber}`}
+                            className="w-full h-auto"
+                          />
+                        ) : workflowType === 'compare' ? (
+                          <DirectImageDisplay 
+                            pageNumber={flaggedPages[selectedPage].matchedPage.pageNumber}
+                            alt={`Page ${flaggedPages[selectedPage].matchedPage.pageNumber}`}
+                            className="w-full h-auto"
+                          />
+                        ) : workflowType === 'intra-compare' ? (
+                          <DirectImageDisplay 
+                            pageNumber={flaggedPages[selectedPage].matchedPage.pageNumber}
+                            alt={`Page ${flaggedPages[selectedPage].matchedPage.pageNumber}`}
+                          />
+                        ) : (
+                          <DirectImageDisplay 
+                            pageNumber={flaggedPages[selectedPage].matchedPage.pageNumber}
+                            alt={`Page ${flaggedPages[selectedPage].matchedPage.pageNumber}`}
+                            className="w-full h-auto"
+                          />
+                        )}
+                      </div>
+                    </div>
+                    <p className="text-sm text-gray-300">
+                      Document: {flaggedPages[selectedPage].matchedPage.filename}
+                    </p>
+                    
+                    {/* Add Keep button under this page */}
+                    {workflowType === 'intra-compare' && onPageAction && !flaggedPages[selectedPage].status && (
+                      <div className="mt-4">
+                        <button 
+                          onClick={() => {
+                            if (window.confirm(`Are you sure you want to keep page ${flaggedPages[selectedPage].matchedPage.pageNumber} and archive page ${flaggedPages[selectedPage].pageNumber}?`)) {
+                              // Find the matched page index
+                              const matchedPageIdx = flaggedPages.findIndex(p => 
+                                p.pageNumber === flaggedPages[selectedPage].matchedPage.pageNumber && 
+                                p.matchedPage.pageNumber === flaggedPages[selectedPage].pageNumber
+                              );
+                              
+                              // Archive this page and keep the matched page
+                              onPageAction(selectedPage, 'archive');
+                              if (matchedPageIdx !== -1) {
+                                onPageAction(matchedPageIdx, 'keep');
+                              }
+                              setSelectedPage(null);
+                            }
+                          }}
+                          className="w-full py-2 px-4 bg-green-600 rounded-lg text-white hover:bg-green-700 transition-colors"
+                        >
+                          Keep This Page
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                
+                <div className="col-span-2 mt-4">
+                  <div className="flex justify-between items-center mb-2">
+                    <span className="text-gray-400">Similarity:</span>
+                    <span className="text-white font-medium">
+                      {(flaggedPages[selectedPage].similarity * 100).toFixed(1)}%
+                    </span>
+                  </div>
+                  <div className="w-full bg-gray-700 rounded-full h-3">
+                    <div 
+                      className={`h-3 rounded-full ${
+                        flaggedPages[selectedPage].similarity > 0.8 ? 'bg-red-500' : 
+                        flaggedPages[selectedPage].similarity > 0.5 ? 'bg-yellow-500' : 'bg-green-500'
+                      }`}
+                      style={{ width: `${(flaggedPages[selectedPage].similarity * 100).toFixed(0)}%` }}
+                    ></div>
+                  </div>
                 </div>
               </div>
+            ) : (
+              // Unique page view (single page)
+              <div className="bg-gray-800 rounded-lg overflow-hidden">
+                {selectedPage < 0 && (
+                  <>
+                    <h4 className="font-medium text-white p-2 border-b border-gray-700">
+                      Page {uniquePages[-1 - selectedPage].pageNumber} (Unique)
+                    </h4>
+                    <div className="p-4">
+                      <div className="border border-gray-700 rounded mb-3 overflow-hidden">
+                        <div id="unique-page-image-container" className="min-h-[400px] flex items-center justify-center">
+                          {workflowType === 'intra-compare' ? (
+                            <DirectImageDisplay 
+                              pageNumber={uniquePages[-1 - selectedPage].pageNumber}
+                              alt={`Page ${uniquePages[-1 - selectedPage].pageNumber}`}
+                            />
+                          ) : (
+                            <DirectImageDisplay 
+                              pageNumber={uniquePages[-1 - selectedPage].pageNumber}
+                              alt={`Page ${uniquePages[-1 - selectedPage].pageNumber}`}
+                              className="w-full h-auto"
+                            />
+                          )}
+                        </div>
+                      </div>
+                      <p className="text-sm text-gray-300">
+                        This page appears to be unique in this document
+                      </p>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+            
+            <div className="mt-6 flex justify-end space-x-2">
+              {/* Actions for flagged pages - Keep Both and Archive Both */}
+              {selectedPage >= 0 && workflowType === 'intra-compare' && onPageAction && !flaggedPages[selectedPage].status && (
+                <>
+                  <button 
+                    onClick={() => {
+                      if (window.confirm('Are you sure you want to archive both pages?')) {
+                        // Find the matched page index
+                        const matchedPageIdx = flaggedPages.findIndex(p => 
+                          p.pageNumber === flaggedPages[selectedPage].matchedPage.pageNumber && 
+                          p.matchedPage.pageNumber === flaggedPages[selectedPage].pageNumber
+                        );
+                        
+                        // Archive both pages
+                        onPageAction(selectedPage, 'archive');
+                        if (matchedPageIdx !== -1) {
+                          onPageAction(matchedPageIdx, 'archive');
+                        }
+                        setSelectedPage(null);
+                      }
+                    }}
+                    className="py-2 px-4 bg-red-600 rounded-lg text-white hover:bg-red-700 transition-colors"
+                  >
+                    Archive Both
+                  </button>
+                  <button 
+                    onClick={() => {
+                      if (window.confirm('Are you sure you want to keep both pages?')) {
+                        // Find the matched page index
+                        const matchedPageIdx = flaggedPages.findIndex(p => 
+                          p.pageNumber === flaggedPages[selectedPage].matchedPage.pageNumber && 
+                          p.matchedPage.pageNumber === flaggedPages[selectedPage].pageNumber
+                        );
+                        
+                        // Keep both pages
+                        onPageAction(selectedPage, 'keep');
+                        if (matchedPageIdx !== -1) {
+                          onPageAction(matchedPageIdx, 'keep');
+                        }
+                        setSelectedPage(null);
+                      }
+                    }}
+                    className="py-2 px-4 bg-green-600 rounded-lg text-white hover:bg-green-700 transition-colors"
+                  >
+                    Keep Both
+                  </button>
+                </>
+              )}
               
-              <div className="bg-gray-800 rounded-lg overflow-hidden">
-                <h4 className="font-medium text-white p-2 border-b border-gray-700">
-                  Similar Page {flaggedPages[selectedPage].matchedPage.pageNumber}
-                </h4>
-                <div className="p-4">
-                  <div className="border border-gray-700 rounded mb-3 overflow-hidden">
-                    <div id="page2-image-container" className="min-h-[200px] flex items-center justify-center">
-                      {(flaggedPages[selectedPage].matchedPage as any).imageUrl ? (
-                        <img 
-                          src={(flaggedPages[selectedPage].matchedPage as any).imageUrl}
-                          alt={`Page ${flaggedPages[selectedPage].matchedPage.pageNumber}`}
-                          className="w-full h-auto"
-                        />
-                      ) : workflowType === 'compare' ? (
-                        <img 
-                          src={getAbsoluteApiUrl(`/compare/tmp/doc2_page${flaggedPages[selectedPage].matchedPage.pageNumber - 1}_*.png`)}
-                          alt={`Page ${flaggedPages[selectedPage].matchedPage.pageNumber}`}
-                          className="w-full h-auto"
-                          onError={() => {
-                            document.getElementById('page2-image-container')!.innerHTML = 
-                              '<div class="p-4 text-center text-gray-400">No image available</div>';
-                          }}
-                        />
-                      ) : workflowType === 'intra-compare' ? (
-                        <img 
-                          src={getAbsoluteApiUrl(`/temp/page${flaggedPages[selectedPage].matchedPage.pageNumber}_*.png`)}
-                          alt={`Page ${flaggedPages[selectedPage].matchedPage.pageNumber}`}
-                          className="w-full h-auto"
-                          onError={() => {
-                            document.getElementById('page2-image-container')!.innerHTML = 
-                              '<div class="p-4 text-center text-gray-400">No image available</div>';
-                          }}
-                        />
-                      ) : (
-                        <img 
-                          src={getAbsoluteApiUrl(`/page/${(flaggedPages[selectedPage].matchedPage as any).pageHash || 
-                                            `${flaggedPages[selectedPage].matchedPage.documentId}_page${flaggedPages[selectedPage].matchedPage.pageNumber}`}/image`)}
-                          alt={`Page ${flaggedPages[selectedPage].matchedPage.pageNumber}`}
-                          className="w-full h-auto"
-                          onError={() => {
-                            document.getElementById('page2-image-container')!.innerHTML = 
-                              '<div class="p-4 text-center text-gray-400">No image available</div>';
-                          }}
-                        />
-                      )}
-                    </div>
-                  </div>
-                  <p className="text-sm text-gray-300">
-                    Document: {flaggedPages[selectedPage].matchedPage.filename}
-                  </p>
-                </div>
-              </div>
-            </div>
-            
-            <div className="mt-4">
-              <div className="flex justify-between items-center mb-2">
-                <span className="text-gray-400">Similarity:</span>
-                <span className="text-white font-medium">
-                  {(flaggedPages[selectedPage].similarity * 100).toFixed(1)}%
-                </span>
-              </div>
-              <div className="w-full bg-gray-700 rounded-full h-3">
-                <div 
-                  className={`h-3 rounded-full ${
-                    flaggedPages[selectedPage].similarity > 0.8 ? 'bg-red-500' : 
-                    flaggedPages[selectedPage].similarity > 0.5 ? 'bg-yellow-500' : 'bg-green-500'
-                  }`}
-                  style={{ width: `${(flaggedPages[selectedPage].similarity * 100).toFixed(0)}%` }}
-                ></div>
-              </div>
-            </div>
-            
-            <div className="mt-6 flex justify-end">
+              {/* Actions for unique pages */}
+              {selectedPage < 0 && workflowType === 'intra-compare' && !uniquePages[-1 - selectedPage].status && (
+                <>
+                  <button 
+                    onClick={() => {
+                      if (window.confirm(`Are you sure you want to archive page ${uniquePages[-1 - selectedPage].pageNumber}?`)) {
+                        handleUniquePageAction(-1 - selectedPage, 'archive');
+                      setSelectedPage(null);
+                      }
+                    }}
+                    className="py-2 px-4 bg-red-600 rounded-lg text-white hover:bg-red-700 transition-colors"
+                  >
+                    Archive Page
+                  </button>
+                  <button 
+                    onClick={() => {
+                      if (window.confirm(`Are you sure you want to keep page ${uniquePages[-1 - selectedPage].pageNumber}?`)) {
+                        handleUniquePageAction(-1 - selectedPage, 'keep');
+                      setSelectedPage(null);
+                      }
+                    }}
+                    className="py-2 px-4 bg-green-600 rounded-lg text-white hover:bg-green-700 transition-colors"
+                  >
+                    Keep Page
+                  </button>
+                </>
+              )}
+              
               <button
                 onClick={() => setSelectedPage(null)}
                 className="py-2 px-4 bg-blue-600 rounded-lg text-white hover:bg-blue-700 transition-colors"
               >
                 Close
               </button>
-              {workflowType === 'intra-compare' && onPageAction && !flaggedPages[selectedPage].status && (
-                <>
-                  <button 
-                    onClick={() => {
-                      onPageAction(selectedPage, 'archive');
-                      setSelectedPage(null);
-                    }}
-                    className="ml-2 py-2 px-4 bg-red-600 rounded-lg text-white hover:bg-red-700 transition-colors"
-                  >
-                    Archive Page
-                  </button>
-                  <button 
-                    onClick={() => {
-                      onPageAction(selectedPage, 'keep');
-                      setSelectedPage(null);
-                    }}
-                    className="ml-2 py-2 px-4 bg-green-600 rounded-lg text-white hover:bg-green-700 transition-colors"
-                  >
-                    Keep Page
-                  </button>
-                </>
-              )}
             </div>
           </div>
         </div>

@@ -73,8 +73,8 @@ export default function UploadDropzone({
         {...getRootProps()}
         className={`p-8 border-2 border-dashed rounded-lg flex flex-col items-center justify-center cursor-pointer transition-colors ${
           isDragActive
-            ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
-            : 'border-gray-300 bg-gray-50 dark:border-gray-700 dark:bg-gray-900/50'
+            ? 'border-accent-primary bg-accent-primary/10'
+            : 'border-accent-secondary/30 bg-surface'
         }`}
       >
         <input {...getInputProps()} />
@@ -82,7 +82,7 @@ export default function UploadDropzone({
         <div className="text-center">
           <svg
             className={`mx-auto h-12 w-12 ${
-              isDragActive ? 'text-blue-500' : 'text-gray-400 dark:text-gray-500'
+              isDragActive ? 'text-accent-primary' : 'text-accent-secondary'
             }`}
             stroke="currentColor"
             fill="none"
@@ -97,10 +97,10 @@ export default function UploadDropzone({
             />
           </svg>
           
-          <p className="mt-2 text-sm font-medium text-gray-900 dark:text-gray-300">
+          <p className="mt-2 text-sm font-medium text-text-primary">
             {label}
           </p>
-          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+          <p className="mt-1 text-xs text-text-secondary">
             {sublabel}
           </p>
         </div>
@@ -108,19 +108,19 @@ export default function UploadDropzone({
       
       {isUploading && (
         <div className="flex items-center justify-center">
-          <div className="w-4 h-4 rounded-full bg-blue-500 animate-pulse mr-2"></div>
-          <p className="text-sm text-gray-500 dark:text-gray-400">Uploading...</p>
+          <div className="w-4 h-4 rounded-full bg-info animate-pulse mr-2"></div>
+          <p className="text-sm text-text-secondary">Uploading...</p>
         </div>
       )}
       
       {uploadError && (
-        <div className="text-sm text-red-500 dark:text-red-400">
+        <div className="text-sm text-error">
           {uploadError}
         </div>
       )}
       
       {uploadedFiles.length > 0 && !isUploading && (
-        <div className="text-sm text-green-500 dark:text-green-400">
+        <div className="text-sm text-success">
           {uploadedFiles.length} file(s) uploaded successfully.
         </div>
       )}

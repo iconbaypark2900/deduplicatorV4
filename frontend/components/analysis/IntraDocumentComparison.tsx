@@ -38,7 +38,8 @@ export default function IntraDocumentComparison({ onComplete }: Props) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [currentPair, setCurrentPair] = useState<number>(0);
-  const [threshold, setThreshold] = useState<number>(0.7);
+  // Set a fixed threshold of 80% (0.8)
+  const threshold = 0.8;
 
   // Handle file upload
   const handleFileUpload = (files: File | File[]) => {
@@ -139,7 +140,8 @@ export default function IntraDocumentComparison({ onComplete }: Props) {
           medicalConfidence: result.medicalConfidence || 0,
           duplicateConfidence: flaggedPages.length > 0 ? 
             flaggedPages.reduce((acc, page) => acc + page.similarity, 0) / flaggedPages.length : 
-            0
+            0,
+          totalPages: result.pages ? result.pages.length : 0
         });
       }
       
@@ -190,28 +192,6 @@ export default function IntraDocumentComparison({ onComplete }: Props) {
             </div>
           )}
         </div>
-
-        {/* Threshold slider */}
-        <div className="mt-4 bg-black text-white rounded-lg shadow p-6">
-          <h3 className="text-lg font-semibold mb-4">Similarity Threshold</h3>
-          <div className="flex items-center">
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.05"
-              value={threshold}
-              onChange={(e) => setThreshold(parseFloat(e.target.value))}
-              className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-            />
-            <span className="ml-4 text-sm font-medium">
-              {(threshold * 100).toFixed(0)}%
-            </span>
-          </div>
-          <p className="mt-2 text-sm text-gray-400">
-            Pages with similarity scores above this threshold will be flagged as potential duplicates.
-          </p>
-        </div>
       </div>
 
       {/* Analyze button */}
@@ -260,7 +240,7 @@ export default function IntraDocumentComparison({ onComplete }: Props) {
                 <h5 className="font-medium mb-2">{results.filename}</h5>
                 <p className="text-sm text-gray-400">{results.pages.length} pages</p>
                 <p className="text-sm text-gray-400">
-                  {results.highSimilarityPairs.length} pairs of pages with similarity above {(threshold * 100).toFixed(0)}%
+                  {results.highSimilarityPairs.length} pairs of pages with similarity above 80%
                 </p>
               </div>
             </div>

@@ -53,6 +53,7 @@ export interface ReviewData {
   reviewHistory: ReviewHistoryEntry[];
   lastReviewer?: string;
   lastReviewedAt?: string;
+  totalPages?: number;
 }
 
 export interface ReviewAction {

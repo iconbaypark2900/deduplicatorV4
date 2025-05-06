@@ -19,6 +19,7 @@ from utils.page_tracker import (
 from similarity.search import find_similar_documents
 from similarity.embedding import embed_text
 from backend.services.rebuilder import extract_page_as_pdf
+from backend.services.image_service import get_page_image_path, get_page_image_url, get_all_page_images
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -76,6 +77,36 @@ async def get_page_image(page_hash: str):
     
     image_path = page_data.get("image_path")
     if not image_path or not os.path.exists(image_path):
+        # Try to find the image in the tmp directory as a fallback
+        tmp_dir = "storage/tmp"
+        
+        # First check if the page_hash is actually a page number
+        try:
+            # See if it's a number like "1", "2", etc.
+            page_number = int(page_hash)
+            
+            # Look for any file matching the pattern page{page_number}_*.png
+            for filename in os.listdir(tmp_dir):
+                if filename.startswith(f"page{page_number}_") and filename.endswith(".png"):
+                    return FileResponse(os.path.join(tmp_dir, filename))
+        except (ValueError, TypeError):
+            # Not a number, continue with normal processing
+            pass
+            
+        # If page_hash contains "_page", it might be a doc_id_pageN format
+        if "_page" in page_hash:
+            try:
+                parts = page_hash.split("_page")
+                if len(parts) == 2:
+                    doc_id, page_number = parts
+                    # Look for any file matching the pattern page{page_number}_*.png
+                    for filename in os.listdir(tmp_dir):
+                        if filename.startswith(f"page{page_number}_") and filename.endswith(".png"):
+                            return FileResponse(os.path.join(tmp_dir, filename))
+            except Exception:
+                # Failed to parse, continue with normal processing
+                pass
+                
         raise HTTPException(status_code=404, detail=f"No image available for page {page_hash}")
     
     return FileResponse(image_path)
@@ -225,3 +256,65 @@ async def search_pages(query: PageSimilarityQuery):
     except Exception as e:
         logger.error(f"Page search failed: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
+
+
+@router.get("/number/{page_number}/image")
+async def get_image_by_page_number(page_number: int):
+    """
+    Get an image directly by page number.
+    This is a more direct route to find images without needing to know the page hash.
+    
+    Args:
+        page_number: The page number to find (1-based index)
+        
+    Returns:
+        Page image
+        
+    Raises:
+        HTTPException: If no image is found for the page number
+    """
+    # Use our image service to find the image
+    image_path = get_page_image_path(page_number)
+    
+    if not image_path or not os.path.exists(image_path):
+        # Try to look in the tmp directory as a fallback
+        tmp_dir = "storage/tmp"
+        
+        # Look for any file matching the pattern page{page_number}_*.png
+        if os.path.exists(tmp_dir):
+            for filename in os.listdir(tmp_dir):
+                if filename.startswith(f"page{page_number}_") and filename.endswith(".png"):
+                    return FileResponse(os.path.join(tmp_dir, filename))
+                    
+        raise HTTPException(status_code=404, detail=f"No image found for page {page_number}")
+    
+    return FileResponse(image_path)
+
+
+@router.get("/debug/image-mapping")
+async def get_image_mapping_status():
+    """
+    Debug endpoint to check the state of the image mapping service.
+    Returns the current mapping of page numbers to image files.
+    
+    Returns:
+        Mapping information and statistics
+    """
+    # Get all page images
+    image_map = get_all_page_images()
+    
+    # Build a response with useful information
+    result = {
+        "total_page_numbers": len(image_map),
+        "page_counts": {str(page_num): len(files) for page_num, files in image_map.items()},
+        "mapping": {}
+    }
+    
+    # Add the first few mappings for inspection
+    for page_num, files in image_map.items():
+        if len(result["mapping"]) < 10:  # Limit to 10 entries to avoid overwhelmingly large response
+            result["mapping"][str(page_num)] = [
+                {"filename": f, "url": f"/temp/{f}"} for f in files[:3]  # Show up to 3 files per page
+            ]
+    
+    return result

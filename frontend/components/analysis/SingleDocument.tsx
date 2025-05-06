@@ -6,6 +6,7 @@ import { documentService } from '../../services/documentService';
 import { getAbsoluteApiUrl } from '../../services/baseApi';
 import { UploadResponse, PageMetadata, DuplicateMatch } from '../../types/document';
 import { ReviewData } from '../../types/review';
+import DirectImageDisplay from '../core/DirectImageDisplay';
 
 interface Props {
   settings: {
@@ -89,16 +90,16 @@ export default function SingleDocument({ settings, onComplete }: Props) {
 
   // Get color based on similarity score
   const getSimilarityColor = (similarity: number): string => {
-    if (similarity > 0.9) return 'bg-red-500 dark:bg-red-600';
-    if (similarity > 0.7) return 'bg-yellow-500 dark:bg-yellow-600';
-    return 'bg-green-500 dark:bg-green-600';
+    if (similarity > 0.9) return 'bg-error';
+    if (similarity > 0.7) return 'bg-warning';
+    return 'bg-success';
   };
 
   return (
     <div className="space-y-6">
-      <div className="bg-black text-white rounded-lg shadow p-6">
-        <h3 className="text-lg font-semibold mb-4">Single Document Analysis</h3>
-        <p className="text-gray-300 mb-4">
+      <div className="card-bordered">
+        <h3 className="text-lg font-semibold mb-4 text-text-primary">Single Document Analysis</h3>
+        <p className="text-text-secondary mb-4">
           Upload a single document to analyze for internal duplicate pages.
         </p>
         <UploadDropzone 
@@ -111,13 +112,13 @@ export default function SingleDocument({ settings, onComplete }: Props) {
 
       {isLoading && (
         <div className="flex justify-center items-center py-8">
-          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
-          <span className="ml-3 text-gray-600 dark:text-gray-400">Analyzing document...</span>
+          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-accent-primary"></div>
+          <span className="ml-3 text-text-secondary">Analyzing document...</span>
         </div>
       )}
 
       {error && (
-        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded dark:bg-red-900/30 dark:text-red-300 dark:border-red-800">
+        <div className="bg-error/10 border border-error text-error px-4 py-3 rounded">
           <p>{error}</p>
         </div>
       )}
@@ -125,47 +126,47 @@ export default function SingleDocument({ settings, onComplete }: Props) {
       {results && (
         <div className="space-y-6">
           {/* Document Summary */}
-          <div className="bg-black text-white rounded-lg shadow p-6">
-            <h3 className="text-xl font-bold mb-4">Document Summary</h3>
+          <div className="card-bordered">
+            <h3 className="text-xl font-bold mb-4 text-text-primary">Document Summary</h3>
             
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-              <div className="border border-gray-700 rounded-lg p-4 bg-gray-900">
-                <h4 className="text-lg font-semibold text-gray-300">Pages</h4>
-                <p className="text-2xl font-bold">{results.pages.length}</p>
+              <div className="card">
+                <h4 className="text-lg font-semibold text-text-secondary">Pages</h4>
+                <p className="text-2xl font-bold text-text-primary">{results.pages.length}</p>
               </div>
               
-              <div className="border border-gray-700 rounded-lg p-4 bg-gray-900">
-                <h4 className="text-lg font-semibold text-gray-300">Duplicates</h4>
-                <p className="text-2xl font-bold">{results.duplicates ? results.duplicates.length : 0}</p>
+              <div className="card">
+                <h4 className="text-lg font-semibold text-text-secondary">Duplicates</h4>
+                <p className="text-2xl font-bold text-text-primary">{results.duplicates ? results.duplicates.length : 0}</p>
               </div>
               
-              <div className="border border-gray-700 rounded-lg p-4 bg-gray-900">
-                <h4 className="text-lg font-semibold text-gray-300">Status</h4>
-                <p className="text-2xl font-bold capitalize">{results.status}</p>
+              <div className="card">
+                <h4 className="text-lg font-semibold text-text-secondary">Status</h4>
+                <p className="text-2xl font-bold text-text-primary capitalize">{results.status}</p>
               </div>
             </div>
           </div>
           
           {/* Duplicate Pages */}
           {results.duplicates && results.duplicates.length > 0 && (
-            <div className="bg-black text-white rounded-lg shadow p-6">
-              <h3 className="text-xl font-bold mb-4">Duplicate Pages</h3>
+            <div className="card-bordered">
+              <h3 className="text-xl font-bold mb-4 text-text-primary">Duplicate Pages</h3>
               
               <div className="space-y-4">
                 {results.duplicates.map((dup, idx) => (
                   <div 
                     key={idx} 
-                    className="border border-gray-700 rounded-lg p-4 bg-gray-900 cursor-pointer hover:bg-gray-800 transition-colors"
+                    className="card cursor-pointer hover:bg-accent-secondary/10 transition-colors"
                     onClick={() => setSelectedDuplicate(
                       selectedDuplicate === dup ? null : dup
                     )}
                   >
                     <div className="flex justify-between items-center">
                       <div>
-                        <h4 className="font-medium">
+                        <h4 className="font-medium text-text-primary">
                           Page {dup.page1_idx + 1} ↔️ Page {dup.page2_idx + 1}
                         </h4>
-                        <p className="text-sm text-gray-400">
+                        <p className="text-sm text-text-secondary">
                           Similarity: {(dup.similarity * 100).toFixed(1)}%
                         </p>
                       </div>
@@ -179,29 +180,29 @@ export default function SingleDocument({ settings, onComplete }: Props) {
                     
                     {selectedDuplicate === dup && (
                       <div className="mt-4 grid grid-cols-2 gap-4">
-                        <div className="border border-gray-700 rounded-lg overflow-hidden">
-                          <h5 className="text-sm font-medium p-2 bg-gray-800">Page {dup.page1_idx + 1}</h5>
-                          <div className="border-t border-b border-gray-700">
-                            <img 
-                              src={results.pages[dup.page1_idx]?.imageUrl} 
+                        <div className="card-bordered overflow-hidden">
+                          <h5 className="text-sm font-medium p-2 bg-surface">Page {dup.page1_idx + 1}</h5>
+                          <div className="border-t border-b border-accent-secondary/20">
+                            <DirectImageDisplay
+                              pageNumber={dup.page1_idx + 1}
                               alt={`Page ${dup.page1_idx + 1}`}
                               className="w-full h-auto"
                             />
                           </div>
-                          <p className="text-xs text-gray-300 p-2">
+                          <p className="text-xs text-text-secondary p-2">
                             {results.pages[dup.page1_idx]?.text_snippet || "No preview available"}
                           </p>
                         </div>
-                        <div className="border border-gray-700 rounded-lg overflow-hidden">
-                          <h5 className="text-sm font-medium p-2 bg-gray-800">Page {dup.page2_idx + 1}</h5>
-                          <div className="border-t border-b border-gray-700">
-                            <img 
-                              src={results.pages[dup.page2_idx]?.imageUrl} 
+                        <div className="card-bordered overflow-hidden">
+                          <h5 className="text-sm font-medium p-2 bg-surface">Page {dup.page2_idx + 1}</h5>
+                          <div className="border-t border-b border-accent-secondary/20">
+                            <DirectImageDisplay
+                              pageNumber={dup.page2_idx + 1}
                               alt={`Page ${dup.page2_idx + 1}`}
                               className="w-full h-auto"
                             />
                           </div>
-                          <p className="text-xs text-gray-300 p-2">
+                          <p className="text-xs text-text-secondary p-2">
                             {results.pages[dup.page2_idx]?.text_snippet || "No preview available"}
                           </p>
                         </div>
@@ -214,8 +215,8 @@ export default function SingleDocument({ settings, onComplete }: Props) {
           )}
           
           {/* All Pages */}
-          <div className="bg-black text-white rounded-lg shadow p-6">
-            <h3 className="text-xl font-bold mb-4">All Pages</h3>
+          <div className="card-bordered">
+            <h3 className="text-xl font-bold mb-4 text-text-primary">All Pages</h3>
             
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
               {results.pages.map((page, idx) => {
@@ -225,31 +226,31 @@ export default function SingleDocument({ settings, onComplete }: Props) {
                   false;
                 
                 return (
-                  <div key={idx} className={`border rounded-lg overflow-hidden ${
-                    isDuplicate ? 'border-red-500 bg-red-900/20' : 'border-gray-700 bg-gray-900'
+                  <div key={idx} className={`card overflow-hidden ${
+                    isDuplicate ? 'border-l-4 border-l-error' : ''
                   }`}>
-                    <div className="flex justify-between items-center p-2">
-                      <h4 className="font-medium">Page {page.page_num}</h4>
+                    <div className="flex justify-between items-center">
+                      <h4 className="font-medium text-text-primary">Page {page.page_num}</h4>
                       {isDuplicate && (
-                        <span className="text-xs bg-red-500 text-white px-2 py-1 rounded-full">
+                        <span className="text-xs bg-error text-white px-2 py-1 rounded-full">
                           Duplicate
                         </span>
                       )}
                     </div>
                     
-                    <div className="border-t border-b border-gray-700">
-                      <img 
-                        src={page.imageUrl} 
+                    <div className="border-t border-b border-accent-secondary/20 my-2">
+                      <DirectImageDisplay
+                        pageNumber={page.page_num}
                         alt={`Page ${page.page_num}`}
                         className="w-full h-auto"
                       />
                     </div>
                     
-                    <div className="p-2">
-                      <p className="text-xs text-gray-300 max-h-20 overflow-hidden">
+                    <div>
+                      <p className="text-xs text-text-secondary max-h-20 overflow-hidden">
                         {page.text_snippet || "No preview available"}
                       </p>
-                      <div className="mt-2 text-xs text-gray-500 truncate">
+                      <div className="mt-2 text-xs text-text-secondary opacity-60 truncate">
                         Hash: {page.page_hash.substring(0, 12)}...
                       </div>
                     </div>

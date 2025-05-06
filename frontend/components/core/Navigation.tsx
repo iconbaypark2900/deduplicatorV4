@@ -248,6 +248,7 @@ export default function Navigation() {
             reviewHistory={reviewData.reviewHistory}
             lastReviewer={reviewData.lastReviewer}
             lastReviewedAt={reviewData.lastReviewedAt}
+            totalPages={reviewData.totalPages}
             onDocumentAction={handleDocumentAction}
             onComplete={handleReviewComplete}
             onPageAction={reviewData.workflowType === 'intra-compare' ? handlePageAction : undefined}

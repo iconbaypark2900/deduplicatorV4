@@ -51,6 +51,29 @@ app.include_router(analyze_router, prefix="/analyze")
 app.mount("/images", StaticFiles(directory="storage/page_images"), name="images")
 app.mount("/temp", StaticFiles(directory="storage/tmp"), name="temp")
 
+@app.get("/debug/available-images")
+async def list_available_images():
+    """
+    Debug endpoint to list all available images in the tmp directory.
+    This helps with troubleshooting image loading issues.
+    """
+    tmp_dir = "storage/tmp"
+    available_images = []
+    
+    if os.path.exists(tmp_dir):
+        for filename in os.listdir(tmp_dir):
+            if filename.endswith(".png"):
+                available_images.append({
+                    "filename": filename,
+                    "url": f"/temp/{filename}",
+                    "full_path": os.path.join(tmp_dir, filename)
+                })
+    
+    return {
+        "total_images": len(available_images),
+        "images": available_images
+    }
+
 @app.get("/")
 async def root():
     """

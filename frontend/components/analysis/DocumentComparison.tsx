@@ -5,6 +5,7 @@ import UploadDropzone from '../core/UploadDropzone';
 import { documentService } from '../../services/documentService';
 import { getAbsoluteApiUrl } from '../../services/baseApi';
 import type { ReviewData, FlaggedPage } from '../../types/review';
+import DirectImageDisplay from '../core/DirectImageDisplay';
 
 interface Props {
   onComplete?: (data: ReviewData) => void;
@@ -302,8 +303,8 @@ export default function DocumentComparison({ onComplete }: Props) {
                     </span>
                   </div>
                   <div className="border border-gray-700 rounded-lg overflow-hidden">
-                    <img
-                      src={results.doc1.pages[currentPagePair].imageUrl}
+                    <DirectImageDisplay
+                      pageNumber={results.doc1.pages[currentPagePair].pageNumber}
                       alt={`Page ${results.doc1.pages[currentPagePair].pageNumber} from document 1`}
                       className="w-full h-auto"
                     />
@@ -323,8 +324,8 @@ export default function DocumentComparison({ onComplete }: Props) {
                     </span>
                   </div>
                   <div className="border border-gray-700 rounded-lg overflow-hidden">
-                    <img
-                      src={results.doc2.pages[currentPagePair].imageUrl}
+                    <DirectImageDisplay
+                      pageNumber={results.doc2.pages[currentPagePair].pageNumber}
                       alt={`Page ${results.doc2.pages[currentPagePair].pageNumber} from document 2`}
                       className="w-full h-auto"
                     />

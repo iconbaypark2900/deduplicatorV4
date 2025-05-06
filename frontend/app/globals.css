@@ -2,6 +2,61 @@
 @tailwind components;
 @tailwind utilities;
 
+@layer base {
+  :root {
+    /* Light mode colors */
+    --bg-color: #F4F1EC;
+    --surface-color: #E5E2DB;
+    --text-primary: #333333;
+    --text-secondary: #4A4A4A;
+    --accent-primary: #C96A50;
+    --accent-secondary: #8AA29E;
+    --accent-secondary-20: rgba(138, 162, 158, 0.2);  /* 20% opacity version */
+    --info-color: #5A7FA2;
+    --success-color: #86A678;
+    --warning-color: #D4963B;
+    --error-color: #D85F4C;
+  }
+
+  .dark {
+    /* Dark mode colors - darker versions of the light mode while maintaining color character */
+    --bg-color: #2A2825;
+    --surface-color: #3A3732;
+    --text-primary: #E6E6E6;
+    --text-secondary: #B8B8B8;
+    --accent-primary: #E08B75;
+    --accent-secondary: #A6BBB8;
+    --accent-secondary-20: rgba(166, 187, 184, 0.2);  /* 20% opacity version */
+    --info-color: #7A9BBE;
+    --success-color: #A2BE96;
+    --warning-color: #F0B263;
+    --error-color: #EF7A6A;
+  }
+}
+
+@layer components {
+  /* Card components */
+  .card {
+    @apply bg-surface rounded-lg p-4 shadow-sm;
+  }
+  
+  .card-bordered {
+    @apply card border border-[var(--accent-secondary-20)];
+  }
+  
+  .card-accent {
+    @apply card border-l-4 border-l-accent-primary;
+  }
+  
+  .progress-bar {
+    @apply w-full bg-surface rounded-full h-2;
+  }
+  
+  .progress-bar-value {
+    @apply bg-accent-primary h-full rounded-full;
+  }
+}
+
 /* Global styles for Medical PDF Deduplicator */
 
 /* Simple CSS reset */
