@@ -16,8 +16,6 @@ from utils.page_tracker import (
     find_duplicates_of_page,
     search_page_snippets
 )
-from similarity.search import find_similar_documents
-from similarity.embedding import embed_text
 from backend.services.rebuilder import extract_page_as_pdf
 from backend.services.image_service import get_page_image_path, get_page_image_url, get_all_page_images
 
@@ -237,19 +235,6 @@ async def search_pages(query: PageSimilarityQuery):
     try:
         # Simple text search
         basic_results = search_page_snippets(query.text, query.max_results)
-        
-        # Try semantic search if available
-        try:
-            # Embed the query
-            query_embedding = embed_text(query.text)
-            
-            # Find similar documents
-            semantic_results = find_similar_documents(query_embedding, query.threshold, query.max_results)
-            
-            # TODO: Combine basic and semantic results
-            # For now, just return basic results
-        except Exception as e:
-            logger.warning(f"Semantic search failed: {str(e)}")
         
         return basic_results
         

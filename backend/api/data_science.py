@@ -148,63 +148,46 @@ async def cluster_documents(files: List[UploadFile] = File(...)):
         
         # Process documents
         nodes = []
-        embeddings = []
-        
-        from similarity.embedding import embed_text
+        all_texts = []
         
         for i, temp_path in enumerate(temp_paths):
             # Extract document content
             full_text, _ = extract_text_and_pages(temp_path)
+            if not full_text:
+                # Handle cases where text extraction fails for a document
+                logger.warning(f"Could not extract text from {os.path.basename(temp_path)}. Skipping this file for clustering.")
+                # Potentially add a node with an error status or skip it
+                continue 
             
-            # Get embedding
-            embedding = embed_text(full_text)
-            embeddings.append(embedding)
+            all_texts.append(full_text)
             
-            # Create node
+            # Create node - initial structure, might be refined by clustering_service output
             nodes.append({
                 "doc_id": doc_ids[i],
-                "filename": os.path.basename(temp_path).split("_", 1)[1],
-                "x": 0,  # Will be updated after clustering
-                "y": 0,  # Will be updated after clustering
-                "cluster_id": None,  # Will be updated after clustering
-                "connections": 0  # Will be updated after calculating edges
+                "filename": os.path.basename(temp_path).split("_", 1)[1] if "_" in os.path.basename(temp_path) else os.path.basename(temp_path),
+                "x": 0, 
+                "y": 0, 
+                "cluster_id": None, 
+                "connections": 0 
             })
         
-        # Calculate similarities and create edges
+        if not nodes: # If all files failed text extraction
+            raise HTTPException(status_code=400, detail="No processable documents found in the uploaded files for clustering.")
+
+        # Calculate similarities and create edges - This section will be replaced by clustering_service logic
         edges = []
-        from similarity.search import compute_similarity
         
-        for i in range(len(embeddings)):
-            for j in range(i+1, len(embeddings)):
-                similarity = compute_similarity(embeddings[i], embeddings[j])
-                
-                # Only keep edges with sufficient similarity
-                if similarity > 0.5:
-                    edges.append({
-                        "source": doc_ids[i],
-                        "target": doc_ids[j],
-                        "weight": similarity
-                    })
-                    
-                    # Update connection count
-                    nodes[i]["connections"] += 1
-                    nodes[j]["connections"] += 1
+        # For now, returning a placeholder response as clustering_service is not implemented
+        logger.warning("Clustering logic via clustering_service.py is not yet implemented. Returning placeholder structure.")
+        clusters = []
+        largest_cluster_size = 0
+        total_clusters = 0
         
-        # Perform clustering
-        clusters = perform_clustering(embeddings, doc_ids)
-        
-        # Assign clusters to nodes
-        for node in nodes:
-            for cluster in clusters:
-                if node["doc_id"] in cluster["documents"]:
-                    node["cluster_id"] = cluster["cluster_id"]
-                    break
-        
-        # Calculate node positions using a simple force-directed layout
+        # Calculate node positions using a simple force-directed layout - Kept for now, may be part of clustering_service
         calculate_node_positions(nodes, edges, clusters)
         
-        # Calculate largest cluster size
-        largest_cluster_size = max(len(cluster["documents"]) for cluster in clusters) if clusters else 0
+        # Calculate largest cluster size - OLD LOGIC REMOVED
+        # largest_cluster_size = max(len(cluster["documents"]) for cluster in clusters) if clusters else 0
         
         # Create response
         result = {
@@ -212,7 +195,7 @@ async def cluster_documents(files: List[UploadFile] = File(...)):
             "edges": edges,
             "clusters": clusters,
             "total_documents": len(nodes),
-            "total_clusters": len(clusters),
+            "total_clusters": total_clusters,
             "largest_cluster_size": largest_cluster_size
         }
         
@@ -504,71 +487,6 @@ def determine_document_specialty(pages_analysis: List[Dict[str, Any]]) -> Option
             max_specialty = specialty
     
     return max_specialty
-
-
-def perform_clustering(embeddings: List[List[float]], doc_ids: List[str]) -> List[Dict[str, Any]]:
-    """
-    Perform clustering on document embeddings.
-    
-    Args:
-        embeddings: List of document embeddings
-        doc_ids: List of document IDs
-        
-    Returns:
-        List of cluster information
-    """
-    if len(embeddings) <= 1:
-        # If only one document, return a single cluster
-        if len(embeddings) == 1:
-            return [{
-                "cluster_id": "cluster_0",
-                "documents": doc_ids,
-                "center_x": 0,
-                "center_y": 0
-            }]
-        else:
-            return []
-    
-    try:
-        # Convert embeddings to numpy array
-        import numpy as np
-        embeddings_array = np.array(embeddings)
-        
-        # Apply clustering algorithm
-        from sklearn.cluster import KMeans
-        
-        # Determine number of clusters (k)
-        k = min(5, len(embeddings))
-        
-        # Perform clustering
-        kmeans = KMeans(n_clusters=k, random_state=42)
-        cluster_labels = kmeans.fit_predict(embeddings_array)
-        
-        # Group documents by cluster
-        clusters = []
-        for i in range(k):
-            cluster_docs = [doc_ids[j] for j in range(len(doc_ids)) if cluster_labels[j] == i]
-            
-            if cluster_docs:
-                clusters.append({
-                    "cluster_id": f"cluster_{i}",
-                    "documents": cluster_docs,
-                    "center_x": 0,  # Will be updated
-                    "center_y": 0   # Will be updated
-                })
-        
-        return clusters
-        
-    except Exception as e:
-        logger.error(f"Clustering failed: {str(e)}")
-        
-        # Return a single cluster as fallback
-        return [{
-            "cluster_id": "cluster_0",
-            "documents": doc_ids,
-            "center_x": 0,
-            "center_y": 0
-        }]
 
 
 def calculate_node_positions(nodes: List[Dict[str, Any]], edges: List[Dict[str, Any]], clusters: List[Dict[str, Any]]):

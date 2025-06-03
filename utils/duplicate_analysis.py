@@ -12,7 +12,7 @@ from datasketch import MinHash
 
 # Import local modules
 from similarity.tfidf import analyze_document_pages
-from similarity.embedding import embed_text
+from similarity.engine import SimilarityEngine
 from ingestion.pdf_reader import extract_text_from_pdf
 
 # Set up logging
@@ -42,15 +42,15 @@ def compute_document_hash(pdf_path: str) -> Optional[str]:
         return None
 
 
-def compute_document_embedding(pdf_path: str) -> Optional[List[float]]:
+def compute_document_tfidf_vector(pdf_path: str) -> Optional[np.ndarray]:
     """
-    Compute an embedding vector for a document based on its text content.
+    Compute a TF-IDF vector for a document based on its text content.
     
     Args:
         pdf_path: Path to the PDF file
         
     Returns:
-        Document embedding vector, or None if text extraction fails
+        Document TF-IDF vector (NumPy array), or None if text extraction fails
     """
     try:
         text = extract_text_from_pdf(pdf_path)
@@ -58,11 +58,12 @@ def compute_document_embedding(pdf_path: str) -> Optional[List[float]]:
             logger.warning(f"No text extracted from {pdf_path}")
             return None
             
-        # Get embedding vector
-        embedding = embed_text(text)
-        return embedding
+        # Get TF-IDF vector
+        engine = SimilarityEngine() # This will use TFIDFStrategy
+        vector = engine.vectorize(text) # This returns a TF-IDF vector (likely a NumPy array)
+        return vector
     except Exception as e:
-        logger.error(f"Error computing document embedding for {pdf_path}: {e}")
+        logger.error(f"Error computing document TF-IDF vector for {pdf_path}: {e}")
         return None
 
 
@@ -111,16 +112,16 @@ def analyze_document_similarity(doc1_path: str, doc2_path: str, threshold: float
     if not doc1_text or not doc2_text:
         raise ValueError("Could not extract text from one or both documents")
     
-    # Compute document-level similarity using embeddings
-    doc1_emb = embed_text(doc1_text)
-    doc2_emb = embed_text(doc2_text)
+    engine = SimilarityEngine() # This will use TFIDFStrategy
+    # Compute document-level similarity using TF-IDF vectors
+    doc1_vec = engine.vectorize(doc1_text)
+    doc2_vec = engine.vectorize(doc2_text)
     
-    if not doc1_emb or not doc2_emb:
-        raise ValueError("Could not compute embeddings for one or both documents")
+    if doc1_vec is None or doc2_vec is None: # Check if vectorization failed
+        raise ValueError("Could not compute TF-IDF vectors for one or both documents")
     
     # Calculate cosine similarity
-    from similarity.search import compute_similarity
-    doc_similarity = compute_similarity(doc1_emb, doc2_emb)
+    doc_similarity = engine.compute_similarity(doc1_vec, doc2_vec)
     
     results = {
         "document_similarity": float(doc_similarity),
@@ -154,8 +155,8 @@ def analyze_document_similarity(doc1_path: str, doc2_path: str, threshold: float
                     "document": "doc2"
                 })
                 
-            # Find similar pages across documents
-            page_embeddings = [embed_text(page["text"]) for page in page_data]
+            # Find similar pages across documents using TF-IDF
+            page_vectors = [engine.vectorize(page["text"]) for page in page_data]
             
             similar_pages = []
             for i in range(len(doc1_pages)):
@@ -163,8 +164,10 @@ def analyze_document_similarity(doc1_path: str, doc2_path: str, threshold: float
                     idx1 = i
                     idx2 = len(doc1_pages) + j
                     
-                    if idx1 < len(page_embeddings) and idx2 < len(page_embeddings):
-                        sim = compute_similarity(page_embeddings[idx1], page_embeddings[idx2])
+                    # Ensure vectors are valid before computing similarity
+                    if idx1 < len(page_vectors) and page_vectors[idx1] is not None and \
+                       idx2 < len(page_vectors) and page_vectors[idx2] is not None:
+                        sim = engine.compute_similarity(page_vectors[idx1], page_vectors[idx2])
                         
                         if sim >= threshold:
                             similar_pages.append({
@@ -228,12 +231,12 @@ def analyze_batch_duplicates(pdf_paths: List[str], threshold: float = 0.85) -> D
                for dup in results["exact_duplicates"]):
             continue
             
-        embedding = compute_document_embedding(pdf_path)
+        embedding = compute_document_tfidf_vector(pdf_path)
         if embedding:
             path_to_embedding[pdf_path] = embedding
     
     # Compare embeddings for near-duplicates
-    from similarity.search import compute_similarity
+    engine = SimilarityEngine() # Create engine instance
     
     paths = list(path_to_embedding.keys())
     for i in range(len(paths)):
@@ -244,7 +247,7 @@ def analyze_batch_duplicates(pdf_paths: List[str], threshold: float = 0.85) -> D
                    for dup in results["exact_duplicates"]):
                 continue
                 
-            sim = compute_similarity(
+            sim = engine.compute_similarity(
                 path_to_embedding[paths[i]],
                 path_to_embedding[paths[j]]
             )

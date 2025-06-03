@@ -1,0 +1,164 @@
+"""
+Enhanced FastAPI application for the Medical PDF Deduplicator system.
+Creates and configures the FastAPI app with all routes, middleware, and database integration.
+"""
+
+import os
+from fastapi import FastAPI, HTTPException, Depends
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+from sqlalchemy.orm import Session
+
+# Import API routes
+from backend.api.upload import router as upload_router
+from backend.api.compare import router as compare_router
+from backend.api.documents import router as documents_router
+from backend.api.page import router as page_router
+from backend.api.data_science import router as data_science_router
+from backend.api.analyze import router as analyze_router
+
+# Import database and configuration utilities
+from utils.database import get_db, init_db
+from utils.config import settings
+
+# Create the FastAPI application
+app = FastAPI(
+    title="Medical PDF Deduplicator",
+    description="Enhanced system for detecting and managing duplicate medical PDFs",
+    version="2.0.0"
+)
+
+# Configure CORS for frontend access
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, restrict this to your frontend domain
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Ensure storage directories exist
+os.makedirs("storage/documents", exist_ok=True)
+os.makedirs("storage/tmp", exist_ok=True)
+os.makedirs("storage/page_images", exist_ok=True)
+os.makedirs("storage/metadata", exist_ok=True)
+
+# Include routers
+app.include_router(upload_router, prefix="/upload")
+app.include_router(compare_router, prefix="/compare")
+app.include_router(documents_router, prefix="/documents")
+app.include_router(page_router, prefix="/page")
+app.include_router(data_science_router, prefix="/data-science")
+app.include_router(analyze_router, prefix="/analyze")
+
+# Mount static file directories for serving images and temp files
+app.mount("/images", StaticFiles(directory="storage/page_images"), name="images")
+app.mount("/temp", StaticFiles(directory="storage/tmp"), name="temp")
+
+@app.get("/debug/available-images")
+async def list_available_images():
+    """
+    Debug endpoint to list all available images in the tmp directory.
+    This helps with troubleshooting image loading issues.
+    """
+    tmp_dir = "storage/tmp"
+    available_images = []
+    
+    if os.path.exists(tmp_dir):
+        for filename in os.listdir(tmp_dir):
+            if filename.endswith(".png"):
+                available_images.append({
+                    "filename": filename,
+                    "url": f"/temp/{filename}",
+                    "full_path": os.path.join(tmp_dir, filename)
+                })
+    
+    return {
+        "total_images": len(available_images),
+        "images": available_images
+    }
+
+@app.get("/")
+async def root():
+    """
+    Root endpoint for the API.
+    Returns basic info about the service.
+    """
+    return {
+        "service": "Medical PDF Deduplicator API",
+        "version": "2.0.0",
+        "status": "running"
+    }
+
+@app.get("/health")
+async def health_check():
+    """
+    Health check endpoint for the API.
+    Used for monitoring and uptime checks.
+    """
+    return {"status": "healthy"}
+
+@app.get("/db-test")
+async def db_test(db: Session = Depends(get_db)):
+    """
+    Test database connection.
+    """
+    try:
+        result = db.execute("SELECT 1").scalar()
+        return {"status": "ok", "db_result": result}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+# Serve document files
+@app.get("/documents/{doc_id}")
+async def serve_document(doc_id: str, db: Session = Depends(get_db)):
+    """
+    Serve a document file given its ID.
+    
+    Args:
+        doc_id: Document identifier
+        
+    Returns:
+        PDF file
+        
+    Raises:
+        HTTPException: If document is not found
+    """
+    # Try to find the document in the database
+    from utils.database import Document
+    doc = db.query(Document).filter(Document.id == doc_id).first()
+    
+    if doc and doc.file_path and os.path.exists(doc.file_path):
+        return FileResponse(doc.file_path)
+    
+    # Fallback to the old system if not found in database
+    # Check unique documents first
+    doc_path = f"storage/documents/unique/{doc_id}.pdf"
+    if os.path.exists(doc_path):
+        return FileResponse(doc_path)
+    
+    # Then check deduplicated documents
+    doc_path = f"storage/documents/deduplicated/{doc_id}.pdf"
+    if os.path.exists(doc_path):
+        return FileResponse(doc_path)
+    
+    # Finally check flagged documents
+    doc_path = f"storage/documents/flagged_for_review/{doc_id}.pdf"
+    if os.path.exists(doc_path):
+        return FileResponse(doc_path)
+    
+    raise HTTPException(status_code=404, detail=f"Document {doc_id} not found")
+
+# Initialize database on startup
+@app.on_event("startup")
+async def startup_event():
+    """
+    Initialize the application on startup.
+    """
+    # Initialize database
+    init_db()
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("backend.main:app", host=settings.HOST, port=settings.PORT, reload=settings.DEBUG)

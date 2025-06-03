@@ -1,0 +1,345 @@
+"""
+Enhanced document highlighting utilities.
+Provides improved visualization of document similarities with color coding and context grouping.
+"""
+
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from typing import List, Dict, Tuple, Set, Any
+import numpy as np
+import math
+import logging
+import re
+
+logger = logging.getLogger(__name__)
+
+
+def normalize_word(word: str) -> str:
+    """
+    Normalize word for comparison by removing punctuation and converting to lowercase.
+    
+    Args:
+        word: Word to normalize
+        
+    Returns:
+        Normalized word
+    """
+    return ''.join(c.lower() for c in word if c.isalnum())
+
+
+def improved_highlight_similarities(
+    image: Image.Image,
+    words_to_highlight: Set[str],
+    word_data: List[Tuple[str, Tuple[int, int, int, int]]],
+    similarity_scores: Dict[str, float] = None
+) -> Image.Image:
+    """
+    Highlight similar words on an image with enhanced visibility and color coding.
+    
+    Args:
+        image: PIL image to highlight
+        words_to_highlight: Set of words to highlight
+        word_data: List of (word, bbox) tuples
+        similarity_scores: Optional dict mapping words to similarity scores
+        
+    Returns:
+        PIL image with improved highlights
+    """
+    # Convert to RGBA for transparency effects
+    if image.mode != 'RGBA':
+        image = image.convert('RGBA')
+    
+    # Create separate overlay for highlights to allow for blending and effects
+    overlay = Image.new('RGBA', image.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    
+    # Normalize words to highlight
+    normalized_words = {normalize_word(word) for word in words_to_highlight}
+    
+    # Group adjacent words that should be highlighted together
+    word_groups = []
+    current_group = []
+    last_x, last_y, last_w = -1, -1, -1
+    
+    for word, bbox in sorted(word_data, key=lambda x: (x[1][1], x[1][0])):  # Sort by y, then x
+        normalized = normalize_word(word)
+        if normalized in normalized_words:
+            x, y, w, h = bbox
+            
+            # Check if this word is close to the previous one
+            if current_group and abs(y - last_y) < h * 1.2 and x - (last_x + last_w) < w * 3:
+                # Add to current group
+                current_group.append((word, bbox))
+            else:
+                # Start new group if needed
+                if current_group:
+                    word_groups.append(current_group)
+                current_group = [(word, bbox)]
+            
+            last_x, last_y, last_w = x, y, w
+    
+    # Add the last group if it exists
+    if current_group:
+        word_groups.append(current_group)
+    
+    # Draw highlights for each group with different opacity based on match quality
+    for group in word_groups:
+        if not group:
+            continue
+            
+        # Calculate the bounding box for the entire group
+        min_x = min(bbox[0] for _, bbox in group)
+        min_y = min(bbox[1] for _, bbox in group)
+        max_x = max(bbox[0] + bbox[2] for _, bbox in group)
+        max_y = max(bbox[1] + bbox[3] for _, bbox in group)
+        
+        # Add padding
+        padding = 4
+        min_x = max(0, min_x - padding)
+        min_y = max(0, min_y - padding)
+        max_x = min(image.width, max_x + padding)
+        max_y = min(image.height, max_y + padding)
+        
+        # Determine highlight color based on content type or similarity score
+        # Default yellow highlighting
+        fill_color = (255, 255, 0, 80)  # Yellow with 31% opacity
+        outline_color = (255, 165, 0, 180)  # Orange outline with 70% opacity
+        
+        # If we have similarity scores, use them to determine color
+        words_in_group = [word for word, _ in group]
+        if similarity_scores and any(word in similarity_scores for word in words_in_group):
+            # Find the average similarity score for words in this group
+            scores = [similarity_scores.get(word, 0.5) for word in words_in_group if word in similarity_scores]
+            avg_score = sum(scores) / len(scores) if scores else 0.5
+            
+            # Color gradient from green (high similarity) to red (low similarity)
+            if avg_score > 0.8:
+                # Green for high similarity (>80%)
+                fill_color = (0, 255, 0, 80)  # Green with 31% opacity
+                outline_color = (0, 200, 0, 180)  # Dark green outline with 70% opacity
+            elif avg_score > 0.5:
+                # Yellow for medium similarity (50-80%)
+                fill_color = (255, 255, 0, 80)  # Yellow with 31% opacity
+                outline_color = (255, 165, 0, 180)  # Orange outline with 70% opacity
+            else:
+                # Red for low similarity (<50%)
+                fill_color = (255, 0, 0, 80)  # Red with 31% opacity
+                outline_color = (200, 0, 0, 180)  # Dark red outline with 70% opacity
+        
+        # Draw the highlight rectangle with rounded corners
+        corner_radius = 3
+        
+        # Use rounded_rectangle if supported (PIL 8.0.0+), otherwise use regular rectangle
+        try:
+            draw.rounded_rectangle(
+                [(min_x, min_y), (max_x, max_y)],
+                radius=corner_radius,
+                fill=fill_color,
+                outline=outline_color,
+                width=2
+            )
+        except AttributeError:
+            # Fallback for older PIL versions
+            draw.rectangle(
+                [(min_x, min_y), (max_x, max_y)],
+                fill=fill_color,
+                outline=outline_color,
+                width=2
+            )
+    
+    # Create a slight blur on the overlay to soften the highlights
+    try:
+        overlay = overlay.filter(ImageFilter.GaussianBlur(radius=0.5))
+    except Exception as e:
+        logger.warning(f"Error applying blur: {e}")
+    
+    # Combine original image with overlay
+    return Image.alpha_composite(image, overlay)
+
+
+def create_visual_diff(image1: Image.Image, image2: Image.Image, similarity_data: Dict[str, Any]) -> Tuple[Image.Image, Image.Image]:
+    """
+    Create a visual diff between two document images with enhanced styling.
+    
+    Args:
+        image1: First image
+        image2: Second image
+        similarity_data: Dictionary with similarity information
+        
+    Returns:
+        Tuple of (highlighted_image1, highlighted_image2)
+    """
+    # Ensure images are in RGBA mode
+    if image1.mode != 'RGBA':
+        image1 = image1.convert('RGBA')
+    if image2.mode != 'RGBA':
+        image2 = image2.convert('RGBA')
+    
+    # Create annotation overlays
+    overlay1 = Image.new('RGBA', image1.size, (0, 0, 0, 0))
+    overlay2 = Image.new('RGBA', image2.size, (0, 0, 0, 0))
+    draw1 = ImageDraw.Draw(overlay1)
+    draw2 = ImageDraw.Draw(overlay2)
+    
+    # Get similarity details
+    additions = similarity_data.get('additions', [])
+    deletions = similarity_data.get('deletions', [])
+    common = similarity_data.get('common', [])
+    similarity = similarity_data.get('similarity', 0.0)
+    
+    # Add a similarity score indicator at the top of each image
+    score_height = 30
+    score_padding = 10
+    
+    # Load a font or use default
+    try:
+        font = ImageFont.truetype("arial.ttf", 14)
+    except (IOError, ImportError):
+        try:
+            font = ImageFont.load_default()
+        except:
+            font = None
+    
+    # Draw similarity score bar on image 1
+    draw1.rectangle(
+        [(0, 0), (image1.width, score_height)],
+        fill=(0, 0, 0, 180)
+    )
+    
+    # Draw similarity score bar on image 2
+    draw2.rectangle(
+        [(0, 0), (image2.width, score_height)],
+        fill=(0, 0, 0, 180)
+    )
+    
+    # Draw similarity score text
+    if font:
+        draw1.text(
+            (score_padding, score_padding),
+            f"Similarity: {similarity:.1%}",
+            fill=(255, 255, 255, 255),
+            font=font
+        )
+        
+        draw2.text(
+            (score_padding, score_padding),
+            f"Similarity: {similarity:.1%}",
+            fill=(255, 255, 255, 255),
+            font=font
+        )
+    else:
+        # Alternative approach if font is not available
+        # This is a workaround using rectangle drawing to simulate text
+        # In a real application, you'd want to ensure font support or use a different approach
+        draw1.rectangle(
+            [(score_padding, score_padding), (score_padding + 100, score_padding + 15)],
+            fill=(255, 255, 255, 255)
+        )
+        draw2.rectangle(
+            [(score_padding, score_padding), (score_padding + 100, score_padding + 15)],
+            fill=(255, 255, 255, 255)
+        )
+    
+    # Choose colors based on similarity
+    if similarity > 0.8:
+        color = (255, 0, 0, 100)  # Red for high similarity
+    elif similarity > 0.5:
+        color = (255, 165, 0, 100)  # Orange for medium similarity
+    else:
+        color = (0, 255, 0, 100)  # Green for low similarity
+    
+    # Draw progress bar showing similarity in the title bar
+    bar_width = int(image1.width * similarity)
+    draw1.rectangle(
+        [(0, score_height - 3), (bar_width, score_height)],
+        fill=color
+    )
+    
+    bar_width = int(image2.width * similarity)
+    draw2.rectangle(
+        [(0, score_height - 3), (bar_width, score_height)],
+        fill=color
+    )
+    
+    # Combine the images with their overlays
+    result1 = Image.alpha_composite(image1, overlay1)
+    result2 = Image.alpha_composite(image2, overlay2)
+    
+    return result1, result2
+
+
+def create_visual_comparison_page(images: List[Image.Image], labels: List[str], title: str = None) -> Image.Image:
+    """
+    Create a single image with multiple document pages for easy comparison.
+    
+    Args:
+        images: List of images to display
+        labels: List of labels for each image
+        title: Optional title for the comparison page
+        
+    Returns:
+        Single combined image
+    """
+    if not images:
+        return Image.new('RGB', (800, 600), color=(255, 255, 255))
+    
+    # Calculate layout
+    num_images = len(images)
+    rows = math.ceil(math.sqrt(num_images))
+    cols = math.ceil(num_images / rows)
+    
+    # Determine image size
+    max_width = max(img.width for img in images)
+    max_height = max(img.height for img in images)
+    
+    # Add margins
+    margin = 20
+    label_height = 30
+    title_height = 50 if title else 0
+    
+    # Create a new image
+    result_width = (max_width + margin) * cols + margin
+    result_height = (max_height + margin + label_height) * rows + margin + title_height
+    result = Image.new('RGB', (result_width, result_height), color=(255, 255, 255))
+    draw = ImageDraw.Draw(result)
+    
+    # Try to load a font
+    try:
+        title_font = ImageFont.truetype("arial.ttf", 24)
+        label_font = ImageFont.truetype("arial.ttf", 14)
+    except (IOError, ImportError):
+        try:
+            title_font = ImageFont.load_default()
+            label_font = ImageFont.load_default()
+        except:
+            title_font = None
+            label_font = None
+    
+    # Draw title if provided
+    if title and title_font:
+        text_width = title_font.getlength(title) if hasattr(title_font, 'getlength') else 0
+        draw.text(
+            (result_width // 2 - text_width // 2, title_height // 2),
+            title,
+            fill=(0, 0, 0),
+            font=title_font
+        )
+    
+    # Place images
+    for i, (image, label) in enumerate(zip(images, labels)):
+        row = i // cols
+        col = i % cols
+        
+        # Calculate position
+        x = margin + col * (max_width + margin)
+        y = margin + title_height + row * (max_height + margin + label_height)
+        
+        # Paste image
+        result.paste(image, (x, y))
+        
+        # Draw label if font is available
+        if label_font:
+            label_y = y + max_height + 5
+            text_width = label_font.getlength(label) if hasattr(label_font, 'getlength') else 0
+            draw.text((x + max_width // 2 - text_width // 2, label_y), label, fill=(0, 0, 0), font=label_font)
+    
+    return result

@@ -9,10 +9,10 @@ from backend.services.logger import log_upload
 from backend.models.schemas import UploadResponse
 from utils.duplicate_analysis import (
     compute_document_hash,
-    compute_document_embedding
+    compute_document_tfidf_vector
 )
 from utils.page_tracker import update_page_hash_map
-from similarity.search import compute_similarity
+from similarity.engine import SimilarityEngine
 import json
 import uuid
 import os
@@ -240,17 +240,17 @@ async def analyze_batch_folder(files: List[UploadFile] = File(...)):
                     logger.warning(f"Failed to compute hash for: {file.filename}")
                     continue
                     
-                # Get document embedding
-                embedding = compute_document_embedding(tmp.name)
-                if embedding is None:
-                    logger.warning(f"Failed to compute embedding for: {file.filename}")
+                # Get document TF-IDF vector
+                vector = compute_document_tfidf_vector(tmp.name)
+                if vector is None:
+                    logger.warning(f"Failed to compute TF-IDF vector for: {file.filename}")
                     continue
                     
                 document_entries.append({
                     "filename": file.filename,
                     "path": tmp.name,
                     "hash": doc_hash,
-                    "vector": embedding
+                    "tfidf_vector": vector
                 })
 
         if not document_entries:
@@ -288,10 +288,10 @@ async def analyze_batch_folder(files: List[UploadFile] = File(...)):
                     continue
                     
                 # Compute similarity
-                from similarity.search import compute_similarity
-                sim = compute_similarity(
-                    document_entries[i]["vector"], 
-                    document_entries[j]["vector"]
+                engine = SimilarityEngine()
+                sim = engine.compute_similarity(
+                    document_entries[i]["tfidf_vector"], 
+                    document_entries[j]["tfidf_vector"]
                 )
                 
                 if sim > 0.9:  # High similarity threshold

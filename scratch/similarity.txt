@@ -1,0 +1,285 @@
+"""
+Enhanced document similarity detection with contextual awareness.
+Incorporates n-gram based comparison, weighted similarity scoring, and section-aware detection.
+"""
+
+import re
+from typing import List, Dict, Set, Tuple, Optional, Any
+import numpy as np
+from collections import defaultdict
+import logging
+
+from ingestion.preprocessing import detect_section_headers
+
+# Set up logging
+logger = logging.getLogger(__name__)
+
+
+def compute_enhanced_text_diff(text1: str, text2: str) -> Dict[str, Any]:
+    """
+    Compute differences between two texts with enhanced accuracy.
+    Uses contextual n-grams and weighted term importance.
+    
+    Args:
+        text1: First text
+        text2: Second text
+        
+    Returns:
+        Dictionary with detailed diff information
+    """
+    # Normalize texts
+    def normalize(text):
+        text = text.replace("\r\n", "\n")
+        text = re.sub(r"\s+", " ", text)
+        return text.lower().strip()
+    
+    text1_norm = normalize(text1)
+    text2_norm = normalize(text2)
+    
+    # Extract n-grams (unigrams, bigrams, and trigrams)
+    def extract_ngrams(text, n):
+        words = text.split()
+        return [' '.join(words[i:i+n]) for i in range(len(words)-(n-1))]
+    
+    # Get different n-gram sets with different weights
+    unigrams1 = set(extract_ngrams(text1_norm, 1))
+    bigrams1 = set(extract_ngrams(text1_norm, 2))
+    trigrams1 = set(extract_ngrams(text1_norm, 3))
+    
+    unigrams2 = set(extract_ngrams(text2_norm, 1))
+    bigrams2 = set(extract_ngrams(text2_norm, 2))
+    trigrams2 = set(extract_ngrams(text2_norm, 3))
+    
+    # Calculate weighted Jaccard similarity
+    # Give higher weights to longer n-grams for better context
+    weights = {
+        'unigram': 0.2,
+        'bigram': 0.3,
+        'trigram': 0.5
+    }
+    
+    # Calculate similarities for each n-gram type
+    def jaccard_similarity(set1, set2):
+        intersection = len(set1.intersection(set2))
+        union = len(set1.union(set2))
+        return intersection / max(union, 1)
+    
+    unigram_sim = jaccard_similarity(unigrams1, unigrams2)
+    bigram_sim = jaccard_similarity(bigrams1, bigrams2)
+    trigram_sim = jaccard_similarity(trigrams1, trigrams2)
+    
+    # Calculate weighted similarity
+    weighted_similarity = (
+        weights['unigram'] * unigram_sim +
+        weights['bigram'] * bigram_sim +
+        weights['trigram'] * trigram_sim
+    )
+    
+    # Find common and differing n-grams, focusing on trigrams for context
+    common_trigrams = trigrams1.intersection(trigrams2)
+    unique_trigrams1 = trigrams1 - trigrams2
+    unique_trigrams2 = trigrams2 - trigrams1
+    
+    # Calculate differences to highlight
+    additions = list(unique_trigrams2)
+    deletions = list(unique_trigrams1)
+    common = list(common_trigrams)
+    
+    result = {
+        "additions": additions,
+        "deletions": deletions,
+        "common": common,
+        "similarity": weighted_similarity,
+        "unigram_similarity": unigram_sim,
+        "bigram_similarity": bigram_sim,
+        "trigram_similarity": trigram_sim,
+        "weighted_similarity": weighted_similarity
+    }
+    
+    return result
+
+
+def detect_medical_terms_with_context(text: str) -> Dict[str, List[Dict[str, Any]]]:
+    """
+    Detect medical terms and provide their surrounding context.
+    Creates a dictionary mapping terms to their contexts in the text.
+    
+    Args:
+        text: Text to analyze
+        
+    Returns:
+        Dictionary mapping terms to context information
+    """
+    from ingestion.preprocessing import extract_medical_terms, MEDICAL_ACRONYMS
+    
+    # Extract medical terms
+    medical_terms = extract_medical_terms(text)
+    
+    # Build context map
+    context_map = defaultdict(list)
+    
+    # Split text into sentences
+    sentences = re.split(r'[.!?]+', text)
+    
+    # For each term, find sentences containing it
+    for term in medical_terms:
+        term_lower = term.lower()
+        for i, sentence in enumerate(sentences):
+            sentence_lower = sentence.lower()
+            if term_lower in sentence_lower:
+                # Get position in sentence
+                position = sentence_lower.find(term_lower)
+                
+                # Add to context map
+                context_map[term].append({
+                    "sentence": sentence.strip(),
+                    "position": position,
+                    "sentence_index": i
+                })
+    
+    # Add common medical acronyms
+    for acronym, expansion in MEDICAL_ACRONYMS.items():
+        acronym_lower = acronym.lower()
+        for i, sentence in enumerate(sentences):
+            sentence_lower = sentence.lower()
+            if acronym_lower in sentence_lower:
+                # Get position in sentence
+                position = sentence_lower.find(acronym_lower)
+                
+                # Add to context map with expansion information
+                context_map[acronym].append({
+                    "sentence": sentence.strip(),
+                    "position": position,
+                    "sentence_index": i,
+                    "expansion": expansion
+                })
+    
+    return dict(context_map)
+
+
+def analyze_section_similarity(text1: str, text2: str) -> Dict[str, Any]:
+    """
+    Analyze similarity between document sections for more structured comparison.
+    Improves detection by comparing corresponding sections.
+    
+    Args:
+        text1: First document text
+        text2: Second document text
+        
+    Returns:
+        Dictionary with section similarity analysis
+    """
+    from ingestion.preprocessing import detect_section_headers
+    
+    # Detect sections in both documents
+    sections1 = detect_section_headers(text1)
+    sections2 = detect_section_headers(text2)
+    
+    # Extract section content
+    def extract_sections(text, section_headers):
+        sections = {}
+        
+        # Sort headers by position
+        sorted_headers = sorted(section_headers, key=lambda h: h["position"])
+        
+        # Extract text between headers
+        for i in range(len(sorted_headers)):
+            section_name = sorted_headers[i]["section"].lower()
+            start_pos = sorted_headers[i]["position"]
+            
+            # Determine end position
+            if i < len(sorted_headers) - 1:
+                end_pos = sorted_headers[i+1]["position"]
+            else:
+                end_pos = len(text)
+            
+            # Extract section content
+            section_content = text[start_pos:end_pos].strip()
+            sections[section_name] = section_content
+        
+        return sections
+    
+    sections_content1 = extract_sections(text1, sections1)
+    sections_content2 = extract_sections(text2, sections2)
+    
+    # Find common sections
+    section_names1 = set(sections_content1.keys())
+    section_names2 = set(sections_content2.keys())
+    common_sections = section_names1.intersection(section_names2)
+    
+    # Compare common sections
+    section_similarities = {}
+    for section_name in common_sections:
+        section_diff = compute_enhanced_text_diff(
+            sections_content1[section_name],
+            sections_content2[section_name]
+        )
+        section_similarities[section_name] = section_diff["weighted_similarity"]
+    
+    # Calculate overall section-based similarity
+    if common_sections:
+        overall_similarity = sum(section_similarities.values()) / len(section_similarities)
+    else:
+        overall_similarity = 0.0
+    
+    return {
+        "common_sections": list(common_sections),
+        "unique_sections1": list(section_names1 - section_names2),
+        "unique_sections2": list(section_names2 - section_names1),
+        "section_similarities": section_similarities,
+        "overall_similarity": overall_similarity
+    }
+
+
+def compute_enhanced_similarity(text1: str, text2: str) -> Dict[str, Any]:
+    """
+    Compute enhanced similarity between two texts.
+    Combines multiple similarity algorithms for improved accuracy.
+    
+    Args:
+        text1: First text
+        text2: Second text
+        
+    Returns:
+        Dictionary with similarity measures
+    """
+    # Check if texts are long enough for meaningful comparison
+    if len(text1) < 100 or len(text2) < 100:
+        logger.warning("Texts too short for reliable similarity comparison")
+        return {
+            "similarity": 0.0,
+            "method": "length_check",
+            "details": {}
+        }
+    
+    # Get text diff with n-gram weighting
+    diff_result = compute_enhanced_text_diff(text1, text2)
+    
+    # Check if both texts have sections, and if so, do section-based comparison
+    sections1 = detect_section_headers(text1)
+    sections2 = detect_section_headers(text2)
+    
+    if sections1 and sections2:
+        # Both documents have sections, so do section-based comparison
+        section_result = analyze_section_similarity(text1, text2)
+        
+        # Combine scores (section similarity is more accurate for structured docs)
+        combined_similarity = 0.7 * section_result["overall_similarity"] + 0.3 * diff_result["weighted_similarity"]
+        
+        return {
+            "similarity": combined_similarity,
+            "method": "section_aware",
+            "text_similarity": diff_result["weighted_similarity"],
+            "section_similarity": section_result["overall_similarity"],
+            "details": {
+                "section_analysis": section_result,
+                "text_diff": diff_result
+            }
+        }
+    else:
+        # Simple documents without sections, rely on n-gram comparison
+        return {
+            "similarity": diff_result["weighted_similarity"],
+            "method": "ngram_weighted",
+            "details": diff_result
+        }

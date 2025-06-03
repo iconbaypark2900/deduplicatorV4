@@ -47,12 +47,22 @@ class Settings(BaseSettings):
     
     # Vector embedding settings
     SIMILARITY_METHOD: str = Field(default="tfidf", env="SIMILARITY_METHOD")
-    VECTOR_DIMENSION: int = Field(default=768)
-    EMBEDDING_MODEL: str = Field(default="all-MiniLM-L6-v2", env="EMBEDDING_MODEL")
+    # VECTOR_DIMENSION: int = Field(default=768)
+    # EMBEDDING_MODEL: str = Field(default="all-MiniLM-L6-v2", env="EMBEDDING_MODEL")
     
     # Clustering settings
     CLUSTER_THRESHOLD: float = Field(default=0.75, env="CLUSTER_THRESHOLD")
     MIN_CLUSTER_SIZE: int = Field(default=2, env="MIN_CLUSTER_SIZE")
+    
+    # LSH settings
+    LSH_JACCARD_THRESHOLD: float = Field(default=0.8, env="LSH_JACCARD_THRESHOLD")
+    LSH_NUM_PERMUTATIONS: int = Field(default=128, env="LSH_NUM_PERMUTATIONS")
+    
+    # Celery / Redis settings
+    REDIS_HOST: str = Field(default="localhost", env="REDIS_HOST")
+    REDIS_PORT: int = Field(default=6379, env="REDIS_PORT")
+    CELERY_BROKER_URL: Optional[str] = Field(default=None, env="CELERY_BROKER_URL")
+    CELERY_RESULT_BACKEND: Optional[str] = Field(default=None, env="CELERY_RESULT_BACKEND")
     
     # Processing limits
     MAX_BATCH_SIZE: int = Field(default=100, env="MAX_BATCH_SIZE")

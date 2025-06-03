@@ -12,7 +12,7 @@ from ingestion.pdf_reader import extract_text_from_pdf, extract_pages_from_pdf
 from ingestion.preprocessing import normalize_medical_text, measure_medical_confidence, extract_medical_terms
 from utils.page_tracker import hash_text
 from similarity.hashing import compute_document_hash
-from utils.duplicate_analysis import compute_document_embedding
+from utils.duplicate_analysis import compute_document_tfidf_vector
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -116,7 +116,7 @@ def analyze_document_content(pdf_path: str) -> Dict[str, Any]:
                 "medical_confidence": 0.0,
                 "duplicate_confidence": 0.0,
                 "hash": None,
-                "embedding": None
+                "tfidf_vector": None
             }
         
         # Extract pages
@@ -126,9 +126,9 @@ def analyze_document_content(pdf_path: str) -> Dict[str, Any]:
         medical_confidences = [measure_medical_confidence(page) for page in pages if page.strip()]
         avg_medical_confidence = sum(medical_confidences) / len(medical_confidences) if medical_confidences else 0.0
         
-        # Compute document hash and embedding
+        # Compute document hash and TF-IDF vector
         doc_hash = compute_document_hash(pdf_path)
-        embedding = compute_document_embedding(pdf_path)
+        tfidf_vec = compute_document_tfidf_vector(pdf_path)
         
         # Determine if document is medical
         is_medical = avg_medical_confidence > 0.6
@@ -138,7 +138,7 @@ def analyze_document_content(pdf_path: str) -> Dict[str, Any]:
             "medical_confidence": avg_medical_confidence,
             "duplicate_confidence": 0.0,  # Will be populated by the caller
             "hash": doc_hash,
-            "embedding": embedding,
+            "tfidf_vector": tfidf_vec,
             "page_count": len(pages),
             "medical_pages": sum(1 for conf in medical_confidences if conf > 0.6)
         }

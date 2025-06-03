@@ -1,0 +1,1014 @@
+"""
+Multi-stage duplicate detection pipeline for the PDF deduplication system.
+Implements a cascading approach of increasingly precise but costlier detection methods.
+"""
+
+import os
+import hashlib
+import logging
+from typing import List, Dict, Optional, Tuple, Any, Set
+import numpy as np
+from datasketch import MinHash, MinHashLSH
+import time
+import pickle
+
+# Import from existing modules
+from similarity.tfidf import tfidf_vectorize
+from utils.config import settings
+from utils.database import get_db, Document, DocumentVector, binary_to_vector, vector_to_binary
+
+# Set up logging
+logger = logging.getLogger(__name__)
+
+
+class DuplicateDetectionPipeline:
+    """
+    Multi-stage pipeline for duplicate detection.
+    Combines multiple approaches for efficient and accurate detection:
+    1. First pass: Fast text hash comparison to catch exact duplicates
+    2. Second pass: MinHash/LSH for approximate matching
+    3. Third pass: Detailed vector comparison for similar documents
+    """
+    
+    def __init__(self, lsh_threshold: float = 0.7, vector_threshold: float = 0.85):
+        """
+        Initialize the detection pipeline.
+        
+        Args:
+            lsh_threshold: Jaccard similarity threshold for LSH matching
+            vector_threshold: Cosine similarity threshold for vector matching
+        """
+        self.lsh_threshold = lsh_threshold
+        self.vector_threshold = vector_threshold
+        
+        # Initialize LSH index
+        self.lsh = MinHashLSH(threshold=lsh_threshold, num_perm=128)
+        self.minhashes = {}  # Cache of document minhashes
+        
+        # Dictionary of document hashes for exact matching
+        self.doc_hashes = {}  # {hash: doc_id}
+        
+        # Load existing indexes
+        self._load_indexes()
+    
+    def _load_indexes(self):
+        """Load existing indexes from database."""
+        try:
+            # Use a database session
+            db = next(get_db())
+            
+            # Load document hashes
+            docs = db.query(Document).all()
+            for doc in docs:
+                if doc.document_hash:
+                    self.doc_hashes[doc.document_hash] = doc.id
+            
+            logger.info(f"Loaded {len(self.doc_hashes)} document hashes from database")
+            
+            # Load document vectors and minhashes
+            vectors = db.query(DocumentVector).all()
+            for vector in vectors:
+                if vector.vector_type == 'embedding':
+                    # Convert from binary
+                    vec_data = binary_to_vector(vector.vector_data)
+                    
+                    # Create minhash for LSH
+                    doc_id = vector.document_id
+                    doc = db.query(Document).filter(Document.id == doc_id).first()
+                    if doc:
+                        # Create minhash from document text
+                        text = doc.full_text if hasattr(doc, 'full_text') and doc.full_text else ""
+                        if text:
+                            minhash = self._create_minhash(text)
+                            self.minhashes[doc_id] = minhash
+                            self.lsh.insert(doc_id, minhash)
+            
+            logger.info(f"Loaded {len(self.minhashes)} document minhashes into LSH index")
+            
+        except Exception as e:
+            logger.warning(f"Error loading indexes from database: {e}")
+    
+    def _compute_text_hash(self, text: str) -> str:
+        """
+        Compute a hash of the document text.
+        
+        Args:
+            text: Document text
+            
+        Returns:
+            SHA-256 hash of the text
+        """
+        # Normalize text
+        normalized_text = " ".join(text.lower().split())
+        return hashlib.sha256(normalized_text.encode('utf-8')).hexdigest()
+    
+    def _create_minhash(self, text: str) -> MinHash:
+        """
+        Create a MinHash representation of the document.
+        
+        Args:
+            text: Document text
+            
+        Returns:
+            MinHash object
+        """
+        minhash = MinHash(num_perm=128)
+        
+        # Create word shingles (3-word sequences)
+        words = text.lower().split()
+        for i in range(len(words) - 2):
+            shingle = " ".join(words[i:i+3])
+            minhash.update(shingle.encode('utf-8'))
+        
+        return minhash
+    
+    def _get_vector(self, text: str, method: str = "embedding") -> np.ndarray:
+        """
+        Get vector representation of text using the specified method.
+        
+        Args:
+            text: Document text
+            method: Vectorization method ('embedding' or 'tfidf')
+            
+        Returns:
+            Vector representation
+        """
+        if method == "embedding":
+            vector = embed_text(text)
+            return np.array(vector)
+        elif method == "tfidf":
+            return tfidf_vectorize(text)
+        else:
+            raise ValueError(f"Unknown vectorization method: {method}")
+    
+    def find_duplicates(self, text: str, doc_id: Optional[str] = None, 
+                        check_hash: bool = True, check_lsh: bool = True, 
+                        check_vector: bool = True) -> Dict[str, Any]:
+        """
+        Find duplicates of a document through multiple stages.
+        
+        Args:
+            text: Document text
+            doc_id: Document identifier (optional)
+            check_hash: Whether to check exact hash matches
+            check_lsh: Whether to check LSH/MinHash matches
+            check_vector: Whether to check vector similarity matches
+            
+        Returns:
+            Dictionary with duplicate detection results
+        """
+        start_time = time.time()
+        results = {
+            "is_duplicate": False,
+            "method": None,
+            "match_id": None,
+            "similarity": 0.0,
+            "processing_time": 0.0,
+            "stages_used": []
+        }
+        
+        if not text or len(text) < 100:
+            logger.warning("Text too short for reliable duplicate detection")
+            results["error"] = "Text too short for reliable detection"
+            return results
+        
+        # Stage 1: Fast hash comparison
+        if check_hash:
+            results["stages_used"].append("hash")
+            hash_result = self._check_hash_duplicates(text)
+            
+            if hash_result["is_duplicate"]:
+                # Found exact duplicate, return immediately
+                hash_result["processing_time"] = time.time() - start_time
+                return hash_result
+        
+        # Stage 2: LSH/MinHash for approximate matching
+        if check_lsh:
+            results["stages_used"].append("lsh")
+            lsh_result = self._check_lsh_duplicates(text)
+            
+            if lsh_result["is_duplicate"]:
+                # Found approximate duplicate with LSH
+                lsh_result["processing_time"] = time.time() - start_time
+                return lsh_result
+        
+        # Stage 3: Vector similarity for more precise matching
+        if check_vector:
+            results["stages_used"].append("vector")
+            vector_result = self._check_vector_duplicates(text)
+            
+            if vector_result["is_duplicate"]:
+                # Found similar document with vector comparison
+                vector_result["processing_time"] = time.time() - start_time
+                return vector_result
+        
+        # No duplicates found
+        results["processing_time"] = time.time() - start_time
+        return results
+    
+    def _check_hash_duplicates(self, text: str) -> Dict[str, Any]:
+        """
+        Check for exact duplicates using hash comparison.
+        
+        Args:
+            text: Document text
+            
+        Returns:
+            Dictionary with hash-based duplicate detection results
+        """
+        result = {
+            "is_duplicate": False,
+            "method": "hash",
+            "match_id": None,
+            "similarity": 0.0
+        }
+        
+        # Compute text hash
+        text_hash = self._compute_text_hash(text)
+        
+        # Check if hash exists
+        if text_hash in self.doc_hashes:
+            result["is_duplicate"] = True
+            result["match_id"] = self.doc_hashes[text_hash]
+            result["similarity"] = 1.0  # Exact match
+            logger.info(f"Found exact duplicate with hash: {result['match_id']}")
+        
+        return result
+    
+    def _check_lsh_duplicates(self, text: str) -> Dict[str, Any]:
+        """
+        Check for approximate duplicates using LSH/MinHash.
+        
+        Args:
+            text: Document text
+            
+        Returns:
+            Dictionary with LSH-based duplicate detection results
+        """
+        result = {
+            "is_duplicate": False,
+            "method": "lsh",
+            "match_id": None,
+            "similarity": 0.0
+        }
+        
+        # Create MinHash
+        minhash = self._create_minhash(text)
+        
+        # Query the LSH index
+        try:
+            candidates = self.lsh.query(minhash)
+            
+            if candidates:
+                # Find the candidate with highest similarity
+                best_similarity = 0.0
+                best_candidate = None
+                
+                for candidate_id in candidates:
+                    candidate_minhash = self.minhashes.get(candidate_id)
+                    if candidate_minhash:
+                        similarity = minhash.jaccard(candidate_minhash)
+                        
+                        if similarity > best_similarity:
+                            best_similarity = similarity
+                            best_candidate = candidate_id
+                
+                if best_similarity >= self.lsh_threshold:
+                    result["is_duplicate"] = True
+                    result["match_id"] = best_candidate
+                    result["similarity"] = best_similarity
+                    logger.info(f"Found approximate duplicate with LSH: {result['match_id']} (similarity: {best_similarity:.4f})")
+        except Exception as e:
+            logger.warning(f"Error in LSH duplicate check: {e}")
+        
+        return result
+    
+    def _check_vector_duplicates(self, text: str) -> Dict[str, Any]:
+        """
+        Check for semantic duplicates using vector similarity.
+        
+        Args:
+            text: Document text
+            
+        Returns:
+            Dictionary with vector-based duplicate detection results
+        """
+        result = {
+            "is_duplicate": False,
+            "method": "vector",
+            "match_id": None,
+            "similarity": 0.0
+        }
+        
+        try:
+            # Get vector representation
+            vector = self._get_vector(text)
+            
+            # Use the database to find similar documents
+            db = next(get_db())
+            vectors = db.query(DocumentVector).filter(DocumentVector.vector_type == 'embedding').all()
+            
+            # Compare with stored vectors
+            best_similarity = 0.0
+            best_match = None
+            
+            for doc_vector in vectors:
+                # Get document ID
+                doc_id = doc_vector.document_id
+                
+                # Convert binary vector data
+                db_vector = binary_to_vector(doc_vector.vector_data)
+                
+                # Calculate cosine similarity
+                similarity = self._compute_vector_similarity(vector, db_vector)
+                
+                if similarity > best_similarity:
+                    best_similarity = similarity
+                    best_match = doc_id
+            
+            if best_similarity >= self.vector_threshold:
+                result["is_duplicate"] = True
+                result["match_id"] = best_match
+                result["similarity"] = best_similarity
+                logger.info(f"Found semantic duplicate with vectors: {result['match_id']} (similarity: {best_similarity:.4f})")
+        except Exception as e:
+            logger.warning(f"Error in vector duplicate check: {e}")
+        
+        return result
+    
+    def _compute_vector_similarity(self, vec1: np.ndarray, vec2: np.ndarray) -> float:
+        """
+        Compute cosine similarity between two vectors.
+        
+        Args:
+            vec1: First vector
+            vec2: Second vector
+            
+        Returns:
+            Cosine similarity (0-1)
+        """
+        # Normalize vectors
+        vec1_norm = vec1 / (np.linalg.norm(vec1) + 1e-8)
+        vec2_norm = vec2 / (np.linalg.norm(vec2) + 1e-8)
+        
+        # Compute cosine similarity
+        similarity = np.dot(vec1_norm, vec2_norm)
+        
+        return float(max(0.0, min(1.0, similarity)))
+    
+    def add_document(self, doc_id: str, text: str) -> Dict[str, Any]:
+        """
+        Add a document to the detection pipeline.
+        
+        Args:
+            doc_id: Document identifier
+            text: Document text
+            
+        Returns:
+            Dictionary with addition results
+        """
+        result = {
+            "added": True,
+            "methods": []
+        }
+        
+        # Add to database
+        try:
+            db = next(get_db())
+            
+            # Compute text hash
+            text_hash = self._compute_text_hash(text)
+            
+            # Add to hash index
+            self.doc_hashes[text_hash] = doc_id
+            result["methods"].append("hash")
+            
+            # Update document hash in database
+            doc = db.query(Document).filter(Document.id == doc_id).first()
+            if doc:
+                doc.document_hash = text_hash
+                
+                # Create minhash
+                minhash = self._create_minhash(text)
+                self.minhashes[doc_id] = minhash
+                self.lsh.insert(doc_id, minhash)
+                result["methods"].append("lsh")
+                
+                # Create embedding vector
+                vector = self._get_vector(text)
+                
+                # Save vector to database
+                doc_vector = DocumentVector(
+                    document_id=doc_id,
+                    vector_type='embedding',
+                    vector_data=vector_to_binary(vector)
+                )
+                db.add(doc_vector)
+                
+                # Commit changes
+                db.commit()
+                result["methods"].append("vector")
+                
+            else:
+                logger.warning(f"Document {doc_id} not found in database")
+                
+        except Exception as e:
+            logger.error(f"Error adding document to indexes: {e}")
+            result["added"] = False
+            result["error"] = str(e)
+        
+        return result
+    
+    def remove_document(self, doc_id: str) -> Dict[str, Any]:
+        """
+        Remove a document from the detection pipeline.
+        
+        Args:
+            doc_id: Document identifier
+            
+        Returns:
+            Dictionary with removal results
+        """
+        result = {
+            "removed": False,
+            "methods": []
+        }
+        
+        try:
+            # Remove from hash index
+            hashes_to_remove = []
+            for hash_val, hash_doc_id in self.doc_hashes.items():
+                if hash_doc_id == doc_id:
+                    hashes_to_remove.append(hash_val)
+            
+            for hash_val in hashes_to_remove:
+                del self.doc_hashes[hash_val]
+            
+            result["methods"].append("hash")
+            
+            # Remove from LSH index
+            if doc_id in self.minhashes:
+                self.lsh.remove(doc_id)
+                del self.minhashes[doc_id]
+                result["methods"].append("lsh")
+            
+            # Remove from database
+            db = next(get_db())
+            db_vector = db.query(DocumentVector).filter(DocumentVector.document_id == doc_id).first()
+            if db_vector:
+                db.delete(db_vector)
+                db.commit()
+                result["methods"].append("vector")
+            
+            result["removed"] = len(result["methods"]) > 0
+            
+        except Exception as e:
+            logger.error(f"Error removing document from indexes: {e}")
+            result["error"] = str(e)
+        
+        return result
+    
+    def analyze_batch(self, texts: List[str], doc_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        """
+        Analyze a batch of documents for duplicates.
+        
+        Args:
+            texts: List of document texts
+            doc_ids: Optional list of document identifiers
+            
+        Returns:
+            List of duplicate detection results
+        """
+        if doc_ids is None:
+            doc_ids = [f"doc_{i}" for i in range(len(texts))]
+        
+        if len(texts) != len(doc_ids):
+            raise ValueError("Number of texts and doc_ids must match")
+        
+        results = []
+        
+        # Process each document
+        for i, (text, doc_id) in enumerate(zip(texts, doc_ids)):
+            logger.debug(f"Processing document {i+1}/{len(texts)}: {doc_id}")
+            
+            # Check for duplicates
+            result = self.find_duplicates(text, doc_id)
+            result["doc_id"] = doc_id
+            results.append(result)
+        
+        return results
+
+
+# Create a global instance
+duplicate_pipeline = DuplicateDetectionPipeline(
+    lsh_threshold=settings.DOC_SIMILARITY_THRESHOLD - 0.05,  # Slightly lower threshold for LSH
+    vector_threshold=settings.DOC_SIMILARITY_THRESHOLD
+)
+
+
+# Convenience functions for API usage
+def check_duplicate(text: str, doc_id: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Check if a document is a duplicate.
+    
+    Args:
+        text: Document text
+        doc_id: Optional document identifier
+        
+    Returns:
+        Duplicate detection results
+    """
+    return duplicate_pipeline.find_duplicates(text, doc_id)
+
+
+def add_document_to_pipeline(doc_id: str, text: str) -> Dict[str, Any]:
+    """
+    Add a document to the duplicate detection system.
+    
+    Args:
+        doc_id: Document identifier
+        text: Document text
+        
+    Returns:
+        Addition results
+    """
+    return duplicate_pipeline.add_document(doc_id, text)
+
+
+def remove_document_from_pipeline(doc_id: str) -> Dict[str, Any]:
+    """
+    Remove a document from the duplicate detection system.
+    
+    Args:
+        doc_id: Document identifier
+        
+    Returns:
+        Removal results
+    """
+    return duplicate_pipeline.remove_document(doc_id)
+
+
+def analyze_batch(texts: List[str], doc_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    """
+    Analyze a batch of documents for duplicates.
+    
+    Args:
+        texts: List of document texts
+        doc_ids: Optional list of document identifiers
+        
+    Returns:
+        List of duplicate detection results
+    """
+    return duplicate_pipeline.analyze_batch(texts, doc_ids)
+
+"""
+Redis caching implementation for the PDF deduplication system.
+Provides caching for document text, embeddings, and analysis results.
+"""
+
+import json
+import hashlib
+import pickle
+import logging
+from typing import Any, Dict, List, Optional, Union, Tuple
+import redis
+from functools import wraps
+
+# Configure logging
+logger = logging.getLogger(__name__)
+
+# Default cache expiration times
+DEFAULT_EXPIRATION = 60 * 60 * 24  # 24 hours
+
+# Import settings
+from utils.config import settings
+
+
+class RedisCache:
+    """
+    Redis caching client for the PDF deduplication system.
+    Handles caching of various data types with serialization/deserialization.
+    """
+    
+    def __init__(self, host: str = None, port: int = None, db: int = None, 
+                 password: Optional[str] = None, prefix: str = 'pdf_dedup:'):
+        """
+        Initialize the Redis cache client.
+        
+        Args:
+            host: Redis host (default from settings)
+            port: Redis port (default from settings)
+            db: Redis database number (default from settings)
+            password: Optional Redis password (default from settings)
+            prefix: Key prefix for all cache entries
+        """
+        # Get settings from environment if not provided
+        self.host = host or getattr(settings, "REDIS_HOST", "localhost")
+        self.port = port or getattr(settings, "REDIS_PORT", 6379)
+        self.db = db or getattr(settings, "REDIS_DB", 0)
+        self.password = password or getattr(settings, "REDIS_PASSWORD", None)
+        self.prefix = prefix
+
+        # Create Redis client
+        self._create_client()
+        
+    def _create_client(self):
+        """Create Redis client and test connection."""
+        try:
+            self.client = redis.Redis(
+                host=self.host,
+                port=self.port,
+                db=self.db,
+                password=self.password,
+                decode_responses=False  # Don't decode responses, we'll handle that ourselves
+            )
+            
+            # Test connection
+            self.client.ping()
+            logger.info(f"Connected to Redis cache at {self.host}:{self.port}")
+            self.available = True
+        except redis.exceptions.ConnectionError as e:
+            logger.warning(f"Could not connect to Redis cache: {e}")
+            self.available = False
+            self.client = None
+    
+    def _make_key(self, key: str) -> str:
+        """
+        Create a prefixed key.
+        
+        Args:
+            key: Original key
+            
+        Returns:
+            Prefixed key
+        """
+        return f"{self.prefix}{key}"
+    
+    def get(self, key: str, default: Any = None) -> Any:
+        """
+        Get a value from the cache.
+        
+        Args:
+            key: Cache key
+            default: Default value if key not found
+            
+        Returns:
+            Cached value or default
+        """
+        if not self.available:
+            return default
+            
+        prefixed_key = self._make_key(key)
+        
+        try:
+            data = self.client.get(prefixed_key)
+            if data is None:
+                return default
+            
+            # Deserialize based on data format
+            return self._deserialize(data)
+        except Exception as e:
+            logger.warning(f"Error getting cache key {key}: {e}")
+            return default
+    
+    def set(self, key: str, value: Any, expiration: int = DEFAULT_EXPIRATION) -> bool:
+        """
+        Set a value in the cache.
+        
+        Args:
+            key: Cache key
+            value: Value to cache
+            expiration: Expiration time in seconds
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self.available:
+            return False
+            
+        prefixed_key = self._make_key(key)
+        
+        try:
+            # Serialize the value
+            data = self._serialize(value)
+            
+            # Set in Redis with expiration
+            return self.client.set(prefixed_key, data, ex=expiration)
+        except Exception as e:
+            logger.warning(f"Error setting cache key {key}: {e}")
+            return False
+    
+    def delete(self, key: str) -> bool:
+        """
+        Delete a value from the cache.
+        
+        Args:
+            key: Cache key
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self.available:
+            return False
+            
+        prefixed_key = self._make_key(key)
+        
+        try:
+            return bool(self.client.delete(prefixed_key))
+        except Exception as e:
+            logger.warning(f"Error deleting cache key {key}: {e}")
+            return False
+    
+    def exists(self, key: str) -> bool:
+        """
+        Check if a key exists in the cache.
+        
+        Args:
+            key: Cache key
+            
+        Returns:
+            True if key exists, False otherwise
+        """
+        if not self.available:
+            return False
+            
+        prefixed_key = self._make_key(key)
+        
+        try:
+            return bool(self.client.exists(prefixed_key))
+        except Exception as e:
+            logger.warning(f"Error checking cache key {key}: {e}")
+            return False
+    
+    def clear_pattern(self, pattern: str) -> int:
+        """
+        Clear all keys matching a pattern.
+        
+        Args:
+            pattern: Pattern to match (e.g., 'doc:*')
+            
+        Returns:
+            Number of keys deleted
+        """
+        if not self.available:
+            return 0
+            
+        prefixed_pattern = self._make_key(pattern)
+        
+        try:
+            keys = self.client.keys(prefixed_pattern)
+            if not keys:
+                return 0
+            
+            return self.client.delete(*keys)
+        except Exception as e:
+            logger.warning(f"Error clearing cache pattern {pattern}: {e}")
+            return 0
+    
+    def _serialize(self, value: Any) -> bytes:
+        """
+        Serialize a value for storage in Redis.
+        
+        Args:
+            value: Value to serialize
+            
+        Returns:
+            Serialized value as bytes
+            
+        Raises:
+            ValueError: If value cannot be serialized
+        """
+        try:
+            if isinstance(value, (str, int, float, bool)) or value is None:
+                # Simple types, use JSON
+                return json.dumps(value).encode('utf-8')
+            elif isinstance(value, (dict, list)):
+                # Check if all keys and values are simple types
+                try:
+                    # Attempt JSON serialization first (faster and more compact)
+                    return json.dumps(value).encode('utf-8')
+                except:
+                    # Fall back to pickle
+                    return pickle.dumps(value)
+            else:
+                # Complex types, use pickle
+                return pickle.dumps(value)
+        except Exception as e:
+            logger.error(f"Serialization error: {e}")
+            raise ValueError(f"Could not serialize value: {e}")
+    
+    def _deserialize(self, data: bytes) -> Any:
+        """
+        Deserialize a value from Redis.
+        
+        Args:
+            data: Serialized data
+            
+        Returns:
+            Deserialized value
+            
+        Raises:
+            ValueError: If data cannot be deserialized
+        """
+        try:
+            # Try JSON first
+            try:
+                return json.loads(data.decode('utf-8'))
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                # Fall back to pickle
+                return pickle.loads(data)
+        except Exception as e:
+            logger.error(f"Deserialization error: {e}")
+            raise ValueError(f"Could not deserialize data: {e}")
+    
+    def hash_key(self, *args, **kwargs) -> str:
+        """
+        Create a hash key from arguments.
+        Useful for function call caching.
+        
+        Args:
+            *args: Positional arguments
+            **kwargs: Keyword arguments
+            
+        Returns:
+            Hashed key string
+        """
+        # Combine all arguments into a tuple
+        key_parts = (args, sorted(kwargs.items()))
+        
+        # Create a hash of the serialized args
+        try:
+            key_data = pickle.dumps(key_parts)
+            return hashlib.md5(key_data).hexdigest()
+        except Exception:
+            # Fallback for non-picklable objects: use string representation
+            key_str = str(args) + str(sorted(kwargs.items()))
+            return hashlib.md5(key_str.encode('utf-8')).hexdigest()
+
+
+# Create a global cache instance
+redis_cache = RedisCache()
+
+
+def cached(prefix: str = '', expiration: int = DEFAULT_EXPIRATION):
+    """
+    Decorator for caching function results in Redis.
+    
+    Args:
+        prefix: Key prefix for the function
+        expiration: Cache expiration time in seconds
+        
+    Returns:
+        Decorated function
+    """
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            # Check for cache disabling in kwargs
+            skip_cache = kwargs.pop('skip_cache', False)
+            if skip_cache or not redis_cache.available:
+                return func(*args, **kwargs)
+            
+            # Create cache key
+            func_name = func.__name__
+            key_hash = redis_cache.hash_key(*args, **kwargs)
+            cache_key = f"{prefix}{func_name}:{key_hash}"
+            
+            # Try to get from cache
+            cached_result = redis_cache.get(cache_key)
+            if cached_result is not None:
+                logger.debug(f"Cache hit for {func_name}")
+                return cached_result
+            
+            # Cache miss, execute function
+            logger.debug(f"Cache miss for {func_name}")
+            result = func(*args, **kwargs)
+            
+            # Cache result
+            redis_cache.set(cache_key, result, expiration=expiration)
+            
+            return result
+        return wrapper
+    return decorator
+
+
+# Document text caching functions
+def cache_document_text(doc_id: str, text: str) -> bool:
+    """
+    Cache the full text of a document.
+    
+    Args:
+        doc_id: Document identifier
+        text: Full document text
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    return redis_cache.set(f"doc:{doc_id}:text", text)
+
+
+def get_cached_document_text(doc_id: str) -> Optional[str]:
+    """
+    Get the cached full text of a document.
+    
+    Args:
+        doc_id: Document identifier
+        
+    Returns:
+        Cached document text or None if not found
+    """
+    return redis_cache.get(f"doc:{doc_id}:text")
+
+
+# Document embedding caching functions
+def cache_document_embedding(doc_id: str, embedding: List[float]) -> bool:
+    """
+    Cache a document embedding vector.
+    
+    Args:
+        doc_id: Document identifier
+        embedding: Document embedding vector
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    return redis_cache.set(f"doc:{doc_id}:embedding", embedding)
+
+
+def get_cached_document_embedding(doc_id: str) -> Optional[List[float]]:
+    """
+    Get a cached document embedding vector.
+    
+    Args:
+        doc_id: Document identifier
+        
+    Returns:
+        Cached embedding vector or None if not found
+    """
+    return redis_cache.get(f"doc:{doc_id}:embedding")
+
+
+# Page caching functions
+def cache_page_text(doc_id: str, page_num: int, text: str) -> bool:
+    """
+    Cache the text of a specific page.
+    
+    Args:
+        doc_id: Document identifier
+        page_num: Page number
+        text: Page text
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    return redis_cache.set(f"doc:{doc_id}:page:{page_num}:text", text)
+
+
+def get_cached_page_text(doc_id: str, page_num: int) -> Optional[str]:
+    """
+    Get the cached text of a specific page.
+    
+    Args:
+        doc_id: Document identifier
+        page_num: Page number
+        
+    Returns:
+        Cached page text or None if not found
+    """
+    return redis_cache.get(f"doc:{doc_id}:page:{page_num}:text")
+
+
+# Comparison result caching functions
+def cache_comparison_result(doc1_id: str, doc2_id: str, result: Dict[str, Any]) -> bool:
+    """
+    Cache a document comparison result.
+    
+    Args:
+        doc1_id: First document identifier
+        doc2_id: Second document identifier
+        result: Comparison result
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    # Sort doc IDs for consistent keys regardless of comparison order
+    sorted_ids = sorted([doc1_id, doc2_id])
+    key = f"compare:{sorted_ids[0]}:{sorted_ids[1]}"
+    return redis_cache.set(key, result)
+
+
+def get_cached_comparison_result(doc1_id: str, doc2_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Get a cached document comparison result.
+    
+    Args:
+        doc1_id: First document identifier
+        doc2_id: Second document identifier
+        
+    Returns:
+        Cached comparison result or None if not found
+    """
+    # Sort doc IDs for consistent keys regardless of comparison order
+    sorted_ids = sorted([doc1_id, doc2_id])
+    key = f"compare:{sorted_ids[0]}:{sorted_ids[1]}"
+    return redis_cache.get(key)

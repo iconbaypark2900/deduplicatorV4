@@ -1,0 +1,468 @@
+-- Documents table
+CREATE TABLE documents (
+    id VARCHAR(255) PRIMARY KEY,
+    filename VARCHAR(255) NOT NULL,
+    file_path VARCHAR(255) NOT NULL,
+    document_hash VARCHAR(255),
+    upload_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    status VARCHAR(50) DEFAULT 'pending', -- 'pending', 'unique', 'duplicate', 'flagged_for_review'
+    file_size BIGINT,
+    page_count INT,
+    medical_confidence FLOAT,
+    duplicate_confidence FLOAT
+);
+
+-- Pages table
+CREATE TABLE pages (
+    id SERIAL PRIMARY KEY,
+    document_id VARCHAR(255) REFERENCES documents(id),
+    page_number INT NOT NULL,
+    page_hash VARCHAR(255) NOT NULL,
+    text_snippet TEXT,
+    page_image_path VARCHAR(255),
+    medical_confidence FLOAT,
+    duplicate_confidence FLOAT,
+    status VARCHAR(50) DEFAULT 'pending', -- 'pending', 'kept', 'archived'
+    UNIQUE (document_id, page_number)
+);
+
+-- Duplicate relationships table
+CREATE TABLE duplicate_relationships (
+    id SERIAL PRIMARY KEY,
+    source_document_id VARCHAR(255) REFERENCES documents(id),
+    duplicate_document_id VARCHAR(255) REFERENCES documents(id),
+    similarity FLOAT NOT NULL,
+    detection_method VARCHAR(50), -- 'hash', 'lsh', 'vector'
+    detection_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (source_document_id, duplicate_document_id)
+);
+
+-- Page duplicates table
+CREATE TABLE page_duplicates (
+    id SERIAL PRIMARY KEY,
+    source_page_id INT REFERENCES pages(id),
+    duplicate_page_id INT REFERENCES pages(id),
+    similarity FLOAT NOT NULL,
+    UNIQUE (source_page_id, duplicate_page_id)
+);
+
+-- Document vectors table (for similarity matching)
+CREATE TABLE document_vectors (
+    document_id VARCHAR(255) PRIMARY KEY REFERENCES documents(id),
+    vector_type VARCHAR(50) NOT NULL, -- 'embedding', 'tfidf'
+    vector_data BYTEA NOT NULL -- binary storage for vector data
+);
+
+-- Page vectors table
+CREATE TABLE page_vectors (
+    page_id INT PRIMARY KEY REFERENCES pages(id),
+    vector_type VARCHAR(50) NOT NULL,
+    vector_data BYTEA NOT NULL
+);
+
+-- Users table
+CREATE TABLE users (
+    id SERIAL PRIMARY KEY,
+    username VARCHAR(255) UNIQUE NOT NULL,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    password_hash VARCHAR(255),
+    role VARCHAR(50) DEFAULT 'reviewer'
+);
+
+-- Review history table
+CREATE TABLE review_history (
+    id SERIAL PRIMARY KEY,
+    document_id VARCHAR(255) REFERENCES documents(id),
+    user_id INT REFERENCES users(id),
+    decision VARCHAR(50) NOT NULL, -- 'keep', 'archive', 'unsure'
+    notes TEXT,
+    review_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Page review decisions
+CREATE TABLE page_review_decisions (
+    id SERIAL PRIMARY KEY,
+    page_id INT REFERENCES pages(id),
+    user_id INT REFERENCES users(id),
+    decision VARCHAR(50) NOT NULL, -- 'keep', 'archive'
+    notes TEXT,
+    review_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Document sections (for medical documents)
+CREATE TABLE document_sections (
+    id SERIAL PRIMARY KEY,
+    document_id VARCHAR(255) REFERENCES documents(id),
+    section_name VARCHAR(255) NOT NULL,
+    section_content TEXT,
+    position_in_document INT
+);
+
+-- Medical entities found in documents
+CREATE TABLE medical_entities (
+    id SERIAL PRIMARY KEY,
+    document_id VARCHAR(255) REFERENCES documents(id),
+    page_id INT REFERENCES pages(id),
+    entity_type VARCHAR(50) NOT NULL, -- 'medication', 'condition', 'procedure', etc.
+    entity_text VARCHAR(255) NOT NULL,
+    context TEXT
+);
+
+"""
+Database connection and ORM setup for the PDF deduplication system.
+"""
+
+import os
+from sqlalchemy import create_engine, Column, Integer, String, Float, ForeignKey, DateTime, LargeBinary, Text, Boolean
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker, relationship
+from sqlalchemy.sql import func
+from typing import Optional, Dict, Any
+import logging
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+# Set up logging
+logger = logging.getLogger(__name__)
+
+# Get database connection details from environment variables
+DB_HOST = os.getenv("DB_HOST", "localhost")
+DB_PORT = os.getenv("DB_PORT", "5432")
+DB_NAME = os.getenv("DB_NAME", "pdf_dedup")
+DB_USER = os.getenv("DB_USER", "postgres")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "postgres")
+
+# Create database connection string
+DB_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+
+# Create engine and session
+try:
+    engine = create_engine(DB_URL)
+    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    logger.info(f"Connected to database: {DB_HOST}:{DB_PORT}/{DB_NAME}")
+except Exception as e:
+    logger.error(f"Failed to connect to database: {e}")
+    raise
+
+# Base class for ORM models
+Base = declarative_base()
+
+# Database models
+class Document(Base):
+    __tablename__ = "documents"
+
+    id = Column(String(255), primary_key=True)
+    filename = Column(String(255), nullable=False)
+    file_path = Column(String(255), nullable=False)
+    document_hash = Column(String(255))
+    upload_timestamp = Column(DateTime, server_default=func.now())
+    status = Column(String(50), default="pending")
+    file_size = Column(Integer)
+    page_count = Column(Integer)
+    medical_confidence = Column(Float)
+    duplicate_confidence = Column(Float)
+
+    # Relationships
+    pages = relationship("Page", back_populates="document", cascade="all, delete-orphan")
+    vectors = relationship("DocumentVector", back_populates="document", cascade="all, delete-orphan")
+    sections = relationship("DocumentSection", back_populates="document", cascade="all, delete-orphan")
+    medical_entities = relationship("MedicalEntity", back_populates="document", cascade="all, delete-orphan")
+    review_history = relationship("ReviewHistory", back_populates="document")
+
+    # Source duplicates (documents that have this document as a duplicate)
+    source_relationships = relationship(
+        "DuplicateRelationship",
+        foreign_keys="DuplicateRelationship.duplicate_document_id",
+        back_populates="duplicate_document"
+    )
+
+    # Duplicate documents (documents that this document is a duplicate of)
+    duplicate_relationships = relationship(
+        "DuplicateRelationship",
+        foreign_keys="DuplicateRelationship.source_document_id",
+        back_populates="source_document"
+    )
+
+
+class Page(Base):
+    __tablename__ = "pages"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    document_id = Column(String(255), ForeignKey("documents.id"), nullable=False)
+    page_number = Column(Integer, nullable=False)
+    page_hash = Column(String(255), nullable=False)
+    text_snippet = Column(Text)
+    page_image_path = Column(String(255))
+    medical_confidence = Column(Float)
+    duplicate_confidence = Column(Float)
+    status = Column(String(50), default="pending")
+
+    # Relationships
+    document = relationship("Document", back_populates="pages")
+    vector = relationship("PageVector", back_populates="page", uselist=False, cascade="all, delete-orphan")
+    medical_entities = relationship("MedicalEntity", back_populates="page", cascade="all, delete-orphan")
+    review_decisions = relationship("PageReviewDecision", back_populates="page")
+    
+    # Source duplicates (pages that have this page as a duplicate)
+    source_duplicates = relationship(
+        "PageDuplicate",
+        foreign_keys="PageDuplicate.duplicate_page_id",
+        back_populates="duplicate_page"
+    )
+
+    # Duplicate pages (pages that this page is a duplicate of)
+    duplicate_pages = relationship(
+        "PageDuplicate",
+        foreign_keys="PageDuplicate.source_page_id",
+        back_populates="source_page"
+    )
+
+
+class DuplicateRelationship(Base):
+    __tablename__ = "duplicate_relationships"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    source_document_id = Column(String(255), ForeignKey("documents.id"), nullable=False)
+    duplicate_document_id = Column(String(255), ForeignKey("documents.id"), nullable=False)
+    similarity = Column(Float, nullable=False)
+    detection_method = Column(String(50))
+    detection_timestamp = Column(DateTime, server_default=func.now())
+
+    # Relationships
+    source_document = relationship("Document", foreign_keys=[source_document_id], back_populates="duplicate_relationships")
+    duplicate_document = relationship("Document", foreign_keys=[duplicate_document_id], back_populates="source_relationships")
+
+
+class PageDuplicate(Base):
+    __tablename__ = "page_duplicates"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    source_page_id = Column(Integer, ForeignKey("pages.id"), nullable=False)
+    duplicate_page_id = Column(Integer, ForeignKey("pages.id"), nullable=False)
+    similarity = Column(Float, nullable=False)
+
+    # Relationships
+    source_page = relationship("Page", foreign_keys=[source_page_id], back_populates="duplicate_pages")
+    duplicate_page = relationship("Page", foreign_keys=[duplicate_page_id], back_populates="source_duplicates")
+
+
+class DocumentVector(Base):
+    __tablename__ = "document_vectors"
+
+    document_id = Column(String(255), ForeignKey("documents.id"), primary_key=True)
+    vector_type = Column(String(50), nullable=False)
+    vector_data = Column(LargeBinary, nullable=False)
+
+    # Relationships
+    document = relationship("Document", back_populates="vectors")
+
+
+class PageVector(Base):
+    __tablename__ = "page_vectors"
+
+    page_id = Column(Integer, ForeignKey("pages.id"), primary_key=True)
+    vector_type = Column(String(50), nullable=False)
+    vector_data = Column(LargeBinary, nullable=False)
+
+    # Relationships
+    page = relationship("Page", back_populates="vector")
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    username = Column(String(255), unique=True, nullable=False)
+    email = Column(String(255), unique=True, nullable=False)
+    password_hash = Column(String(255))
+    role = Column(String(50), default="reviewer")
+
+    # Relationships
+    review_history = relationship("ReviewHistory", back_populates="user")
+    page_review_decisions = relationship("PageReviewDecision", back_populates="user")
+
+
+class ReviewHistory(Base):
+    __tablename__ = "review_history"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    document_id = Column(String(255), ForeignKey("documents.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    decision = Column(String(50), nullable=False)
+    notes = Column(Text)
+    review_timestamp = Column(DateTime, server_default=func.now())
+
+    # Relationships
+    document = relationship("Document", back_populates="review_history")
+    user = relationship("User", back_populates="review_history")
+
+
+class PageReviewDecision(Base):
+    __tablename__ = "page_review_decisions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    page_id = Column(Integer, ForeignKey("pages.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    decision = Column(String(50), nullable=False)
+    notes = Column(Text)
+    review_timestamp = Column(DateTime, server_default=func.now())
+
+    # Relationships
+    page = relationship("Page", back_populates="review_decisions")
+    user = relationship("User", back_populates="page_review_decisions")
+
+
+class DocumentSection(Base):
+    __tablename__ = "document_sections"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    document_id = Column(String(255), ForeignKey("documents.id"), nullable=False)
+    section_name = Column(String(255), nullable=False)
+    section_content = Column(Text)
+    position_in_document = Column(Integer)
+
+    # Relationships
+    document = relationship("Document", back_populates="sections")
+
+
+class MedicalEntity(Base):
+    __tablename__ = "medical_entities"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    document_id = Column(String(255), ForeignKey("documents.id"), nullable=False)
+    page_id = Column(Integer, ForeignKey("pages.id"))
+    entity_type = Column(String(50), nullable=False)
+    entity_text = Column(String(255), nullable=False)
+    context = Column(Text)
+
+    # Relationships
+    document = relationship("Document", back_populates="medical_entities")
+    page = relationship("Page", back_populates="medical_entities")
+
+
+# Database session management
+def get_db():
+    """
+    Get a database session.
+    
+    Returns:
+        Database session
+    """
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+# Create all tables
+def create_tables():
+    Base.metadata.create_all(bind=engine)
+
+
+# Initialize database
+def init_db():
+    """
+    Initialize the database.
+    Creates all tables and initial data if necessary.
+    """
+    try:
+        # Create tables
+        create_tables()
+        logger.info("Created database tables")
+        
+        # Create default admin user if not exists
+        with SessionLocal() as db:
+            admin_exists = db.query(User).filter(User.username == "admin").first()
+            if not admin_exists:
+                admin = User(
+                    username="admin",
+                    email="admin@example.com",
+                    password_hash="$2b$12$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeG6Lruj3vjPGga31lW",  # "password"
+                    role="admin"
+                )
+                db.add(admin)
+                db.commit()
+                logger.info("Created default admin user")
+                
+    except Exception as e:
+        logger.error(f"Failed to initialize database: {e}")
+        raise
+
+
+# Helper functions
+def serialize_document(document: Document) -> Dict[str, Any]:
+    """
+    Serialize a document object to a dictionary.
+    
+    Args:
+        document: Document ORM object
+        
+    Returns:
+        Dictionary with document data
+    """
+    return {
+        "doc_id": document.id,
+        "filename": document.filename,
+        "status": document.status,
+        "upload_timestamp": document.upload_timestamp.isoformat() if document.upload_timestamp else None,
+        "page_count": document.page_count,
+        "medical_confidence": document.medical_confidence,
+        "duplicate_confidence": document.duplicate_confidence,
+        "file_size": document.file_size
+    }
+
+
+def serialize_page(page: Page) -> Dict[str, Any]:
+    """
+    Serialize a page object to a dictionary.
+    
+    Args:
+        page: Page ORM object
+        
+    Returns:
+        Dictionary with page data
+    """
+    return {
+        "page_id": page.id,
+        "document_id": page.document_id,
+        "page_number": page.page_number,
+        "page_hash": page.page_hash,
+        "text_snippet": page.text_snippet,
+        "status": page.status,
+        "medical_confidence": page.medical_confidence,
+        "duplicate_confidence": page.duplicate_confidence,
+        "image_path": page.page_image_path
+    }
+
+
+# Vector serialization helpers
+import numpy as np
+import pickle
+
+def vector_to_binary(vector: np.ndarray) -> bytes:
+    """
+    Convert a vector to binary for storage.
+    
+    Args:
+        vector: Numpy array
+        
+    Returns:
+        Binary representation
+    """
+    return pickle.dumps(vector)
+
+
+def binary_to_vector(binary_data: bytes) -> np.ndarray:
+    """
+    Convert binary data back to a vector.
+    
+    Args:
+        binary_data: Binary representation
+        
+    Returns:
+        Numpy array
+    """
+    return pickle.loads(binary_data)

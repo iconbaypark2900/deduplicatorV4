@@ -6,8 +6,6 @@ Provides routes for comparing documents and visualizing differences.
 from fastapi import APIRouter, UploadFile, File, HTTPException, Form
 from fastapi.responses import FileResponse
 from backend.services.extractor import extract_text_and_pages
-from similarity.embedding import embed_text
-from similarity.search import compute_similarity
 from backend.services.diff_utils import compute_text_diff, compute_changed_bounding_boxes
 from pdf2image import convert_from_path
 import pytesseract
@@ -18,6 +16,9 @@ import uuid
 import time
 import logging
 from typing import List, Tuple, Dict, Any
+
+from ingestion.pdf_reader import extract_text_from_pdf
+from similarity.engine import SimilarityEngine
 
 # Create temporary directory for storing images
 TEMP_DIR = os.path.abspath("storage/tmp")
@@ -274,12 +275,32 @@ async def compare_documents(
         path1 = os.path.join(TEMP_DIR, file1.filename)
         path2 = os.path.join(TEMP_DIR, file2.filename)
         
-        with open(path1, "wb") as f:
-            f.write(await file1.read())
-        with open(path2, "wb") as f:
-            f.write(await file2.read())
+        # Ensure files are written before attempting to read for TF-IDF
+        with open(path1, "wb") as f_wb1:
+            f_wb1.write(await file1.read())
+        with open(path2, "wb") as f_wb2:
+            f_wb2.write(await file2.read())
 
-        logger.debug("Converting PDFs to images")
+        # Calculate TF-IDF based document similarity
+        tfidf_similarity = 0.0
+        try:
+            text1 = extract_text_from_pdf(path1)
+            text2 = extract_text_from_pdf(path2)
+            if text1 and text2:
+                engine = SimilarityEngine()
+                vec1 = engine.vectorize(text1)
+                vec2 = engine.vectorize(text2)
+                if vec1 is not None and vec2 is not None:
+                    tfidf_similarity = engine.compute_similarity(vec1, vec2)
+                else:
+                    logger.warning("Could not compute TF-IDF vectors for one or both documents.")
+            else:
+                logger.warning("Could not extract text for TF-IDF for one or both documents.")
+        except Exception as e:
+            logger.error(f"Error calculating TF-IDF similarity: {e}", exc_info=True)
+            # Continue with OCR comparison even if TF-IDF fails
+
+        logger.debug("Converting PDFs to images for OCR-based comparison")
         # Convert PDFs to images with higher DPI for better OCR
         pages1 = convert_from_path(path1, dpi=300)
         pages2 = convert_from_path(path2, dpi=300)
@@ -355,9 +376,9 @@ async def compare_documents(
                 "similarity": round(page_similarity, 4)
             })
 
-        # Calculate overall similarity
-        overall_similarity = total_similarity / total_pages if total_pages > 0 else 0.0
-        logger.debug(f"Overall document similarity: {overall_similarity:.2f}")
+        # Calculate overall OCR-based similarity (average of page Jaccard scores)
+        ocr_overall_similarity = total_similarity / total_pages if total_pages > 0 else 0.0
+        logger.debug(f"Overall OCR-based document similarity: {ocr_overall_similarity:.2f}")
 
         # Clean up only the PDF files, preserve the processed images
         os.unlink(path1)
@@ -375,7 +396,8 @@ async def compare_documents(
                 "filename": file2.filename,
                 "pages": doc2_pages
             },
-            "similarity": round(overall_similarity, 4)  # Overall document similarity
+            "similarity": round(tfidf_similarity, 4),  # TF-IDF based overall document similarity
+            "ocr_similarity": round(ocr_overall_similarity, 4) # OCR based average page similarity
         }
 
     except Exception as e:

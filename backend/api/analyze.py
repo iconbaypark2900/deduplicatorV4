@@ -14,9 +14,10 @@ import uuid
 import time
 import logging
 from typing import List, Tuple, Dict, Any, Set
-import numpy as np
 from collections import defaultdict
 from ingestion.preprocessing import measure_medical_confidence
+from ingestion.pdf_reader import extract_pages_from_pdf
+from similarity.tfidf import analyze_document_pages as tfidf_analyze_document_pages
 
 # Create temporary directory for storing images
 TEMP_DIR = os.path.abspath("storage/tmp")
@@ -175,37 +176,18 @@ def highlight_similar_words(
     return Image.alpha_composite(image, overlay)
 
 
-def calculate_similarity_score(words1_set: Set[str], words2_set: Set[str]) -> float:
-    """
-    Calculate Jaccard similarity between two sets of words.
-    
-    Args:
-        words1_set: First set of words
-        words2_set: Second set of words
-        
-    Returns:
-        Similarity score between 0 and 1
-    """
-    if not words1_set or not words2_set:
-        return 0.0
-        
-    intersection = len(words1_set.intersection(words2_set))
-    union = len(words1_set.union(words2_set))
-    
-    return intersection / union if union > 0 else 0.0
-
-
 @router.post("/intra-document")
 async def analyze_intra_document(
     file: UploadFile = File(...),
     threshold: float = Form(0.7)
 ):
     """
-    Analyze a PDF document for internal similarities between pages.
+    Analyze a PDF document for internal similarities between pages using TF-IDF.
+    Highlights are generated for pages found similar by TF-IDF.
     
     Args:
         file: PDF file to analyze
-        threshold: Minimum similarity threshold (0-1)
+        threshold: Minimum TF-IDF similarity threshold (0-1)
         
     Returns:
         Dictionary with analysis results
@@ -214,134 +196,135 @@ async def analyze_intra_document(
         HTTPException: If analysis fails
     """
     try:
-        logger.info(f"Starting intra-document analysis with threshold {threshold}")
+        logger.info(f"Starting intra-document analysis with TF-IDF threshold {threshold} for {file.filename}")
         
-        # Save uploaded file temporarily
-        file_path = os.path.join(TEMP_DIR, file.filename)
-        with open(file_path, "wb") as f:
+        temp_file_path = os.path.join(TEMP_DIR, f"{uuid.uuid4()}_{file.filename}")
+        with open(temp_file_path, "wb") as f:
             f.write(await file.read())
         
-        # Convert PDF to images
-        logger.debug("Converting PDF to images")
-        pages = convert_from_path(file_path, dpi=300)
-        logger.info(f"Converted {len(pages)} pages")
+        # 1. Extract text from all pages
+        page_texts = extract_pages_from_pdf(temp_file_path)
+        if not page_texts:
+            os.unlink(temp_file_path)
+            logger.warning(f"Could not extract any text from {file.filename}")
+            raise HTTPException(status_code=400, detail="Could not extract text from document.")
         
-        # Extract text and normalized words from each page
-        page_data = []
-        page_words = []
-        page_texts = []  # Store extracted text for medical analysis
+        logger.info(f"Extracted text from {len(page_texts)} pages.")
+
+        # 2. Initial images for all pages (non-highlighted)
+        page_images_pil = convert_from_path(temp_file_path, dpi=300) # For targeted OCR later
+        if len(page_images_pil) != len(page_texts):
+            logger.warning(f"Mismatch between text page count ({len(page_texts)}) and image page count ({len(page_images_pil)}). Using lower count.")
+            # Adjust to the minimum to prevent index errors, though this indicates a problem
+            min_pages = min(len(page_texts), len(page_images_pil))
+            page_texts = page_texts[:min_pages]
+            page_images_pil = page_images_pil[:min_pages]
+            if not min_pages:
+                os.unlink(temp_file_path)
+                raise HTTPException(status_code=500, detail="Failed to convert PDF pages to images consistently.")
+
+        page_data_response = []
         preserved_files = set()
-        
-        for i, page in enumerate(pages):
-            logger.debug(f"Processing page {i+1}")
-            
-            # Extract words and their positions
-            words_with_boxes = extract_words_with_boxes(page)
-            
-            # Get normalized words as a set
-            words_set = set(normalize_word(word) for word, _ in words_with_boxes)
-            
-            # Extract full text from the page for medical analysis
-            page_text = " ".join(word for word, _ in words_with_boxes)
-            page_texts.append(page_text)
-            
-            # Save original page image
+        for i, p_img in enumerate(page_images_pil):
             unique_id = str(uuid.uuid4())[:8]
-            img_path = os.path.join(TEMP_DIR, f"page{i+1}_{unique_id}.png")
-            page.save(img_path, "PNG")
+            img_path = os.path.join(TEMP_DIR, f"page{i+1}_{unique_id}_orig.png")
+            p_img.save(img_path, "PNG")
             preserved_files.add(os.path.basename(img_path))
-            
-            # Store page data
-            page_data.append({
+            page_data_response.append({
                 "pageNumber": i + 1,
-                "imageUrl": f"/temp/{os.path.basename(img_path)}",
-                "wordCount": len(words_set)
+                "imageUrl": f"/analyze/tmp/{os.path.basename(img_path)}", # Changed prefix to /analyze
+                "ocrWordCount": 0 # Will be updated if OCR is done for highlighting
             })
-            
-            # Store normalized words for similarity calculation
-            page_words.append({
-                "pageNumber": i + 1,
-                "words": words_set,
-                "wordBoxes": words_with_boxes
-            })
-        
-        # Calculate similarity matrix
-        similarity_matrix = []
-        high_similarity_pairs = []
-        
-        for i, page1 in enumerate(page_words):
-            for j, page2 in enumerate(page_words):
-                if i < j:  # Only compute upper triangle to avoid duplicates
-                    similarity = calculate_similarity_score(page1["words"], page2["words"])
-                    
-                    # Store in matrix
-                    similarity_matrix.append({
-                        "page1": page1["pageNumber"],
-                        "page2": page2["pageNumber"],
-                        "similarity": round(similarity, 4)
-                    })
-                    
-                    # If similarity exceeds threshold, mark as high similarity
-                    if similarity >= threshold:
-                        logger.info(f"High similarity found: Page {page1['pageNumber']} and Page {page2['pageNumber']} - {similarity:.4f}")
-                        high_similarity_pairs.append({
-                            "page1": page1["pageNumber"],
-                            "page2": page2["pageNumber"],
-                            "similarity": round(similarity, 4)
-                        })
-                        
-                        # Highlight similar content on both pages
-                        common_words = page1["words"].intersection(page2["words"])
-                        
-                        # Get both page images
-                        original_page1 = pages[i].convert('RGBA')
-                        original_page2 = pages[j].convert('RGBA')
-                        
-                        # Highlight common words
-                        highlighted_page1 = highlight_similar_words(
-                            original_page1, common_words, page1["wordBoxes"]
-                        )
-                        highlighted_page2 = highlight_similar_words(
-                            original_page2, common_words, page2["wordBoxes"]
-                        )
-                        
-                        # Save highlighted images
-                        highlighted_id = str(uuid.uuid4())[:8]
-                        img_path1 = os.path.join(TEMP_DIR, f"page{page1['pageNumber']}_hl_{highlighted_id}.png")
-                        img_path2 = os.path.join(TEMP_DIR, f"page{page2['pageNumber']}_hl_{highlighted_id}.png")
-                        
-                        highlighted_page1.save(img_path1, "PNG")
-                        highlighted_page2.save(img_path2, "PNG")
-                        
-                        preserved_files.add(os.path.basename(img_path1))
-                        preserved_files.add(os.path.basename(img_path2))
-                        
-                        # Update page URLs to the highlighted versions for these pages
-                        for p in page_data:
-                            if p["pageNumber"] == page1["pageNumber"]:
-                                p["imageUrl"] = f"/temp/{os.path.basename(img_path1)}"
-                            elif p["pageNumber"] == page2["pageNumber"]:
-                                p["imageUrl"] = f"/temp/{os.path.basename(img_path2)}"
-        
-        # Clean up the original PDF file
-        os.unlink(file_path)
-        cleanup_old_temp_files(TEMP_DIR, max_age_hours=1, preserve_files=preserved_files)
-        
-        # Sort high similarity pairs by similarity (descending)
-        high_similarity_pairs.sort(key=lambda x: x["similarity"], reverse=True)
-        
-        # Calculate medical confidence
+
+        # 3. TF-IDF based similarity analysis
+        # Note: tfidf_analyze_document_pages expects list of texts and returns 0-indexed pairs
+        tfidf_similar_pairs = tfidf_analyze_document_pages(page_texts, threshold=threshold)
+        logger.info(f"Found {len(tfidf_similar_pairs)} page pairs with TF-IDF similarity >= {threshold}")
+
+        # 4. Targeted OCR and Highlighting for TF-IDF similar pairs
+        highlighted_page_info = {} # Store info about highlighted pages: {page_num_1_based: new_url}
+
+        for pair in tfidf_similar_pairs:
+            idx1, idx2 = pair["page1_idx"], pair["page2_idx"]
+            similarity_score = pair["similarity"]
+            logger.info(f"Processing TF-IDF similar pair: Page {idx1+1} and Page {idx2+1} (Similarity: {similarity_score:.4f})")
+
+            try:
+                img1_pil = page_images_pil[idx1]
+                img2_pil = page_images_pil[idx2]
+
+                words_data1 = extract_words_with_boxes(img1_pil)
+                words_data2 = extract_words_with_boxes(img2_pil)
+
+                # Update OCR word count for these pages in page_data_response
+                for p_data in page_data_response:
+                    if p_data["pageNumber"] == idx1 + 1:
+                        p_data["ocrWordCount"] = len(set(normalize_word(w) for w, _ in words_data1))
+                    if p_data["pageNumber"] == idx2 + 1:
+                        p_data["ocrWordCount"] = len(set(normalize_word(w) for w, _ in words_data2))
+
+                common_words_for_highlight = set(normalize_word(w) for w, _ in words_data1).intersection(
+                                           set(normalize_word(w) for w, _ in words_data2)
+                                         )
+                if not common_words_for_highlight:
+                    logger.info(f"No common OCR words found between page {idx1+1} and {idx2+1} despite TF-IDF similarity.")
+                    continue
+
+                hl_img1 = highlight_similar_words(img1_pil.copy(), common_words_for_highlight, words_data1)
+                hl_img2 = highlight_similar_words(img2_pil.copy(), common_words_for_highlight, words_data2)
+                
+                hl_unique_id = str(uuid.uuid4())[:8]
+                hl_img_path1 = os.path.join(TEMP_DIR, f"page{idx1+1}_{hl_unique_id}_hl.png")
+                hl_img_path2 = os.path.join(TEMP_DIR, f"page{idx2+1}_{hl_unique_id}_hl.png")
+                
+                hl_img1.save(hl_img_path1, "PNG")
+                hl_img2.save(hl_img_path2, "PNG")
+                preserved_files.add(os.path.basename(hl_img_path1))
+                preserved_files.add(os.path.basename(hl_img_path2))
+
+                highlighted_page_info[idx1 + 1] = f"/analyze/tmp/{os.path.basename(hl_img_path1)}"
+                highlighted_page_info[idx2 + 1] = f"/analyze/tmp/{os.path.basename(hl_img_path2)}"
+            except Exception as e_ocr:
+                logger.error(f"Error during OCR/highlighting for pages {idx1+1}, {idx2+1}: {e_ocr}", exc_info=True)
+                # Continue to next pair
+
+        # Update image URLs in page_data_response if highlighted versions exist
+        for p_data in page_data_response:
+            if p_data["pageNumber"] in highlighted_page_info:
+                p_data["imageUrl"] = highlighted_page_info[p_data["pageNumber"]]
+
+        # 5. Medical Confidence
         medical_confidences = [measure_medical_confidence(text) for text in page_texts if text.strip()]
         avg_medical_confidence = sum(medical_confidences) / len(medical_confidences) if medical_confidences else 0.0
+
+        # Clean up the original uploaded PDF file
+        os.unlink(temp_file_path)
+        cleanup_old_temp_files(TEMP_DIR, max_age_hours=1, preserve_files=preserved_files)
         
+        # Prepare final highSimilarityPairs with 1-based indexing
+        final_high_similarity_pairs = [
+            {"page1": pair["page1_idx"] + 1, "page2": pair["page2_idx"] + 1, "similarity": pair["similarity"]}
+            for pair in tfidf_similar_pairs
+        ]
+        final_high_similarity_pairs.sort(key=lambda x: x["similarity"], reverse=True)
+
         return {
             "filename": file.filename,
-            "pages": page_data,
-            "similarityMatrix": similarity_matrix,
-            "highSimilarityPairs": high_similarity_pairs,
+            "pages": page_data_response,
+            # "similarityMatrix": [], # Removed as it was Jaccard based and computationally intensive for all pairs
+            "highSimilarityPairs": final_high_similarity_pairs, # TF-IDF based pairs
             "medicalConfidence": round(avg_medical_confidence, 4)
         }
         
+    except HTTPException: # Re-raise HTTPExceptions directly
+        raise
     except Exception as e:
-        logger.error(f"Intra-document analysis failed: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Analysis failed: {e}") 
+        # Log the specific error before raising a generic one
+        logger.error(f"Intra-document analysis failed for {file.filename}: {str(e)}", exc_info=True)
+        # Clean up temp file in case of failure before unlinking
+        if 'temp_file_path' in locals() and os.path.exists(temp_file_path):
+            try:
+                os.unlink(temp_file_path)
+            except Exception as e_clean:
+                logger.error(f"Failed to cleanup temp file {temp_file_path} on error: {e_clean}")
+        raise HTTPException(status_code=500, detail=f"Intra-document analysis failed: {str(e)}") 
