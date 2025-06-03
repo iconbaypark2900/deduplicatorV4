@@ -17,6 +17,9 @@ from backend.api.page import router as page_router
 from backend.api.data_science import router as data_science_router
 from backend.api.analyze import router as analyze_router
 
+# Import TF-IDF vectorizer functions
+from similarity.tfidf import fit_vectorizer_and_save
+
 # Create the FastAPI application
 app = FastAPI(
     title="Duplicate Document Detection",
@@ -50,6 +53,16 @@ app.include_router(analyze_router, prefix="/analyze")
 # Mount static file directories for serving images and temp files
 app.mount("/images", StaticFiles(directory="storage/page_images"), name="images")
 app.mount("/temp", StaticFiles(directory="storage/tmp"), name="temp")
+
+# Example texts to fit the vectorizer
+example_texts = [
+    "This is a sample document.",
+    "Another example document text.",
+    "More sample text for vectorizer fitting."
+]
+
+# Initialize the TF-IDF vectorizer during application startup
+fit_vectorizer_and_save(example_texts)
 
 @app.get("/debug/available-images")
 async def list_available_images():

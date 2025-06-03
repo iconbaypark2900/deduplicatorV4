@@ -128,32 +128,39 @@ def preprocess_text(text: str) -> str:
 def _load_vectorizer() -> Optional[TfidfVectorizer]:
     """
     Load the fitted TF-IDF vectorizer from file.
-    Returns the vectorizer if found and loaded, else None or an unfitted instance.
+    Returns the fitted vectorizer if found and valid, otherwise None.
     """
     global VECTORIZER
-    if VECTORIZER is not None: # Return cached instance if available
-        return VECTORIZER
+    # Check cached instance first
+    if VECTORIZER is not None:
+        if hasattr(VECTORIZER, 'vocabulary_') and VECTORIZER.vocabulary_:
+            # logger.debug("Returning cached fitted TF-IDF vectorizer.") # Optional: for verbose logging
+            return VECTORIZER
+        else:
+            logger.warning("Cached TF-IDF vectorizer is not fitted. Attempting to load from file.")
+            # Fall through to load from file, as the cached one is not good
 
     if os.path.exists(VECTORIZER_FILE):
         try:
             with open(VECTORIZER_FILE, "rb") as f:
-                VECTORIZER = pickle.load(f)
-                logger.info("Loaded existing TF-IDF vectorizer from file.")
-                if hasattr(VECTORIZER, 'vocabulary_') and VECTORIZER.vocabulary_:
-                    return VECTORIZER
-                else:
-                    logger.warning("Loaded vectorizer from file is not fitted.")
-                    # Return the unfitted instance; calling function must check
-                    return VECTORIZER 
+                loaded_vectorizer = pickle.load(f)
+            logger.info(f"Successfully loaded TF-IDF vectorizer from {VECTORIZER_FILE}.")
+            
+            if hasattr(loaded_vectorizer, 'vocabulary_') and loaded_vectorizer.vocabulary_:
+                VECTORIZER = loaded_vectorizer # Update cache with the good one
+                return VECTORIZER
+            else:
+                logger.warning(f"Vectorizer loaded from {VECTORIZER_FILE} is not fitted. Discarding.")
+                VECTORIZER = None # Ensure cache doesn't hold an unfitted one
+                return None
         except Exception as e:
-            logger.error(f"Error loading vectorizer from {VECTORIZER_FILE}: {e}. Returning new unfitted instance.")
-            # Fallback to a new, unfitted vectorizer instance
-            VECTORIZER = TfidfVectorizer(ngram_range=(1, 2), stop_words='english')
-            return VECTORIZER
+            logger.error(f"Error loading or validating vectorizer from {VECTORIZER_FILE}: {e}. Returning None.", exc_info=True)
+            VECTORIZER = None # Clear cache on error
+            return None
     else:
-        logger.warning(f"Vectorizer file {VECTORIZER_FILE} not found. Returning new unfitted instance.")
-        VECTORIZER = TfidfVectorizer(ngram_range=(1, 2), stop_words='english')
-        return VECTORIZER
+        logger.warning(f"Vectorizer file {VECTORIZER_FILE} not found. No TF-IDF vectorizer available. Run the vectorizer management task.")
+        VECTORIZER = None # Ensure cache is clear
+        return None
 
 
 def _save_vectorizer(vectorizer: TfidfVectorizer) -> None:

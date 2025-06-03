@@ -8,11 +8,7 @@ import os
 import json
 from typing import List, Dict, Optional, Any, Union
 
-from utils.config import settings
 from similarity.vectorization import VectorizationStrategy, TFIDFStrategy
-
-# Similarity method configuration
-SIMILARITY_METHOD = getattr(settings, "SIMILARITY_METHOD", "tfidf")
 
 
 class SimilarityEngine:
@@ -25,7 +21,6 @@ class SimilarityEngine:
         """
         Initialize the similarity engine for TF-IDF.
         """
-        self.method = "tfidf"
         self._ensure_storage_dirs()
         self.vectorizer = self._get_vectorizer()
 

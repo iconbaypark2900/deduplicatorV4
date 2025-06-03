@@ -11,8 +11,8 @@ from similarity.hashing import (
     compute_document_hash, 
     get_minhash, 
     create_lsh_index, 
-    add_to_lsh_index, 
-    query_lsh_index
+    query_lsh_index,
+    get_lsh_index_instance
 )
 from similarity.engine import SimilarityEngine 
 from similarity.tfidf import (
@@ -28,41 +28,21 @@ from utils.config import settings # For LSH_THRESHOLD, DOC_SIMILARITY_THRESHOLD
 from utils.database import get_db, upsert_document_metadata, get_document_by_hash
 
 # Import Celery tasks
-from backend.tasks.clustering_tasks import run_clustering_task
+# from backend.tasks.clustering_tasks import run_clustering_task # No longer called directly here
 
 logger = logging.getLogger(__name__)
 
-# --- LSH Index Management ---
-LSH_INDEX_FILE = "storage/metadata/lsh_index.pkl"
-LSH_THRESHOLD = settings.LSH_JACCARD_THRESHOLD if hasattr(settings, 'LSH_JACCARD_THRESHOLD') else 0.8 
-LSH_NUM_PERM = settings.LSH_NUM_PERMUTATIONS if hasattr(settings, 'LSH_NUM_PERMUTATIONS') else 128
+# --- LSH Index Management --- MOVED TO similarity/hashing.py
+# LSH_INDEX_FILE = "storage/metadata/lsh_index.pkl"
+# LSH_THRESHOLD = settings.LSH_JACCARD_THRESHOLD if hasattr(settings, 'LSH_JACCARD_THRESHOLD') else 0.8 
+# LSH_NUM_PERM = settings.LSH_NUM_PERMUTATIONS if hasattr(settings, 'LSH_NUM_PERMUTATIONS') else 128
 
-# Ensure metadata directory exists for LSH index
-os.makedirs(os.path.dirname(LSH_INDEX_FILE), exist_ok=True)
+# Ensure metadata directory exists for LSH index - MOVED
+# os.makedirs(os.path.dirname(LSH_INDEX_FILE), exist_ok=True)
 
-def get_lsh_index_instance(): # Renamed to avoid conflict if LSH_INDEX is a global var
-    if os.path.exists(LSH_INDEX_FILE):
-        try:
-            with open(LSH_INDEX_FILE, 'rb') as f:
-                logger.info(f"Loading LSH index from {LSH_INDEX_FILE}")
-                return pickle.load(f)
-        except Exception as e:
-            logger.error(f"Error loading LSH index from {LSH_INDEX_FILE}: {e}. Creating new one.")
-    logger.info("LSH index file not found. Creating new LSH index.")
-    return create_lsh_index(threshold=LSH_THRESHOLD, num_perm=LSH_NUM_PERM)
-
-def save_lsh_index_instance(lsh_index): # Renamed
-    try:
-        with open(LSH_INDEX_FILE, 'wb') as f:
-            pickle.dump(lsh_index, f)
-        logger.info(f"LSH index saved to {LSH_INDEX_FILE}")
-    except Exception as e:
-        logger.error(f"Error saving LSH index to {LSH_INDEX_FILE}: {e}")
-
-# Global LSH instance - IMPORTANT: This is not safe for concurrent Celery workers modifying the index.
-# A lock or a DB-backed/centralized LSH service would be needed for production Celery.
-LSH_INDEX = get_lsh_index_instance()
-
+# get_lsh_index_instance and save_lsh_index_instance MOVED to similarity/hashing.py
+# def get_lsh_index_instance(): ... 
+# def save_lsh_index_instance(lsh_index): ...
 
 class PipelineOrchestrator:
     def __init__(self):
@@ -142,12 +122,12 @@ class PipelineOrchestrator:
 
             # --- Stage 2: Near Duplicate Check (MinHash LSH) ---
             logger.info(f"[{doc_id}] Stage 2: Performing MinHash LSH check.")
-            minhash_obj = get_minhash(full_text, num_perm=LSH_NUM_PERM)
+            # Use LSH_NUM_PERM from hashing.py (via settings) or define it if needed from settings directly
+            minhash_obj = get_minhash(full_text) # NUM_PERM is now default in get_minhash from settings
             
-            # TODO: Concurrency strategy for LSH_INDEX update for Celery.
-            # For now, direct modification and save.
-            global LSH_INDEX
-            potential_duplicates_ids = query_lsh_index(LSH_INDEX, minhash_obj)
+            # Load the LSH index on demand to get the latest version
+            current_lsh_index = get_lsh_index_instance() # This now comes from similarity.hashing
+            potential_duplicates_ids = query_lsh_index(current_lsh_index, minhash_obj)
             potential_duplicates_ids = [pid for pid in potential_duplicates_ids if pid != doc_id] # Filter self
 
             minhash_signature_hex = ''.join(format(x, '02x') for x in minhash_obj.hashvalues.tobytes())
@@ -162,10 +142,10 @@ class PipelineOrchestrator:
             with get_db() as db: # Store MinHash signature
                 upsert_document_metadata(db, doc_id, minhash_signature=minhash_signature_hex, status="processing_tfidf")
             
-            # Add to LSH index - this needs to be thread/process-safe for Celery
-            if doc_id not in LSH_INDEX: # Avoid re-inserting if already present (idempotency)
-                add_to_lsh_index(LSH_INDEX, doc_id, minhash_obj)
-                save_lsh_index_instance(LSH_INDEX) # Persist LSH index after adding
+            # The LSH_INDEX is now considered read-only in this context.
+            # It's updated by a separate, periodic Celery task.
+            # We no longer add to it or save it here to avoid concurrency issues.
+            # MinHash signature is saved to DB, LSH index rebuild task will pick it up.
 
 
             # --- Stage 3: Content Similarity (TF-IDF) & Vector Storage ---
@@ -206,12 +186,14 @@ class PipelineOrchestrator:
                 log_upload(doc_id, original_filename, "error_tfidf_vectorization")
 
             # --- Stage 4: Trigger DBSCAN Clustering Update (Placeholder) ---
-            if processing_status["final_status"] not in ["exact_duplicate", "error_text_extraction", "error_tfidf_vectorization", "error_hash_computation"]:
-                logger.info(f"[{doc_id}] Stage 4: Triggering DBSCAN clustering update.")
-                run_clustering_task.delay() 
-                processing_status["stages"]["dbscan_trigger"] = "Triggered"
-                if task_self:
-                    task_self.update_state(state='PROGRESS', meta={'current_stage': 'DBSCAN Triggered', 'progress': 95, 'doc_id': doc_id})
+            # Clustering is now handled by a separate, periodic Celery Beat task
+            # and is no longer triggered after each individual document processing.
+            # if processing_status["final_status"] not in ["exact_duplicate", "error_text_extraction", "error_tfidf_vectorization", "error_hash_computation"]:
+            #     logger.info(f"[{doc_id}] Stage 4: DBSCAN clustering update is now periodic, not triggered here.")
+            #     # run_clustering_task.delay() # REMOVED
+            #     processing_status["stages"]["dbscan_trigger"] = "Handled by periodic task"
+            #     if task_self:
+            #         task_self.update_state(state='PROGRESS', meta={'current_stage': 'DBSCAN Trigger Skipped (Periodic)', 'progress': 95, 'doc_id': doc_id})
 
             logger.info(f"[{doc_id}] Pipeline processing completed for {original_filename} with status: {processing_status['final_status']}")
             # Final state update is handled by the calling Celery task in pipeline_tasks.py

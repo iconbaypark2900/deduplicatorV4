@@ -26,6 +26,15 @@ from cli.doc_comparator import compare_documents_workflow
 from cli.batch_folder import batch_folder_check
 from cli.intra_doc_inspector import inspect_intra_document
 
+# Import Celery tasks for CLI triggers
+try:
+    from backend.tasks.vectorizer_tasks import manage_tfidf_vectorizer_task
+    # Import other tasks if they need CLI triggers, e.g.:
+    # from backend.tasks.lsh_tasks import rebuild_global_lsh_index_task
+except ImportError as e:
+    logger.warning(f"Could not import Celery tasks for CLI: {e}. Task-triggering CLI commands may not work.")
+    manage_tfidf_vectorizer_task = None
+
 
 def setup_parser() -> argparse.ArgumentParser:
     """
@@ -50,6 +59,10 @@ Examples:
   
   # Start the web server
   pdf-dedupe server
+  
+  # Manage TF-IDF Vectorizer
+  pdf-dedupe manage-vectorizer
+  pdf-dedupe manage-vectorizer --force-refit
         """
     )
     
@@ -81,6 +94,11 @@ Examples:
     server_parser.add_argument("--port", type=int, default=8000, help="Port to bind to")
     server_parser.add_argument("--reload", action="store_true", help="Enable auto-reload")
     
+    # Manage Vectorizer command
+    vectorizer_parser = subparsers.add_parser("manage-vectorizer", help="Manage the TF-IDF vectorizer (fit/refit and update document vectors)")
+    vectorizer_parser.add_argument("--force-refit", action="store_true", default=False,
+                               help="Force refitting the vectorizer even if one exists. Default: False.")
+    
     return parser
 
 
@@ -111,6 +129,10 @@ def validate_args(args: argparse.Namespace) -> bool:
         if not os.path.isfile(args.document):
             logger.error(f"Document not found: {args.document}")
             return False
+    
+    elif args.command == "manage-vectorizer":
+        # No specific validation needed for manage-vectorizer beyond argparse handling the boolean flag
+        return True
     
     return True
 
@@ -146,6 +168,21 @@ def run_command(args: argparse.Namespace) -> int:
             reload=args.reload
         )
         return 0
+    
+    elif args.command == "manage-vectorizer":
+        if manage_tfidf_vectorizer_task:
+            logger.info(f"Triggering TF-IDF vectorizer management task with force_refit={args.force_refit}...")
+            try:
+                # Using .delay() as a shortcut for .apply_async() with default options
+                manage_tfidf_vectorizer_task.delay(force_refit=args.force_refit)
+                logger.info("Task successfully queued. Check Celery worker logs for progress.")
+                return 0
+            except Exception as e:
+                logger.error(f"Failed to queue TF-IDF vectorizer management task: {e}", exc_info=True)
+                return 1
+        else:
+            logger.error("manage_tfidf_vectorizer_task is not available. Ensure Celery and its tasks are correctly configured.")
+            return 1
     
     else:
         logger.error(f"Unknown command: {args.command}")

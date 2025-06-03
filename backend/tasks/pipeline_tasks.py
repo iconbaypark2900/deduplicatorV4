@@ -1,10 +1,19 @@
 # backend/tasks/pipeline_tasks.py
 import logging
+import os
 from backend.celery_app import app
 from backend.services.pipeline_orchestrator import PipelineOrchestrator
 from utils.config import settings # For any task-specific configurations if needed
 
 logger = logging.getLogger(__name__)
+
+# Ensure necessary storage directories exist for the orchestrator/tasks
+# This might also be done at app startup, but good to ensure here too if tasks run independently.
+os.makedirs(settings.TEMP_PATH, exist_ok=True)
+os.makedirs(settings.DOCUMENT_PATH, exist_ok=True)
+# Add other directories if used by pipeline (e.g., page_images)
+os.makedirs(settings.PAGE_IMAGES_PATH, exist_ok=True)
+os.makedirs(settings.METADATA_PATH, exist_ok=True)
 
 @app.task(bind=True, name="pipeline.process_document")
 def process_document_task(self, pdf_path: str, original_filename: str, doc_id: str = None):

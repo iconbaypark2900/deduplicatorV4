@@ -9,15 +9,23 @@ import os
 from typing import List, Dict, Optional, Set, Tuple, Any
 import logging
 from datasketch import MinHash, MinHashLSH
+import pickle
 
 from ingestion.pdf_reader import extract_text_from_pdf, extract_pages_from_pdf
+from utils.database import DocumentMetadata, get_db
+from sqlalchemy.orm import Session
+from utils.config import settings
 
 # Set up logging
 logger = logging.getLogger(__name__)
 
 # Constants
-NUM_PERM = 128  # Number of permutations for MinHash
-JACCARD_THRESHOLD = 0.8  # Default similarity threshold for LSH
+NUM_PERM = settings.LSH_NUM_PERMUTATIONS if hasattr(settings, 'LSH_NUM_PERMUTATIONS') else 128
+JACCARD_THRESHOLD = settings.LSH_JACCARD_THRESHOLD if hasattr(settings, 'LSH_JACCARD_THRESHOLD') else 0.8
+LSH_INDEX_FILE = "storage/metadata/lsh_index.pkl"
+
+# Ensure metadata directory exists for LSH index
+os.makedirs(os.path.dirname(LSH_INDEX_FILE), exist_ok=True)
 
 
 def compute_document_hash(pdf_path: str) -> Optional[str]:
@@ -113,33 +121,89 @@ def get_minhash(text: str, num_perm: int = NUM_PERM) -> MinHash:
 
 def create_lsh_index(threshold: float = JACCARD_THRESHOLD, num_perm: int = NUM_PERM) -> MinHashLSH:
     """
-    Create a Locality-Sensitive Hashing (LSH) index for fast similarity search.
+    Create an empty Locality-Sensitive Hashing (LSH) index.
     
     Args:
         threshold: Jaccard similarity threshold
         num_perm: Number of permutations for MinHash
         
     Returns:
-        LSH index
+        An empty LSH index
     """
     return MinHashLSH(threshold=threshold, num_perm=num_perm)
 
 
-def add_to_lsh_index(lsh_index: MinHashLSH, doc_id: str, minhash: MinHash) -> None:
+def rebuild_lsh_index_from_db(lsh_index: MinHashLSH, db: Session) -> None:
     """
-    Add a document to the LSH index.
-    
+    Populates the LSH index with MinHash signatures from the database.
+    This should be called to initialize or update an in-memory LSH index.
+
     Args:
-        lsh_index: LSH index
-        doc_id: Document identifier
-        minhash: MinHash object for the document
+        lsh_index: An existing MinHashLSH index object to populate.
+        db: SQLAlchemy session.
     """
-    lsh_index.insert(doc_id, minhash)
+    logger.info("Rebuilding LSH index from database...")
+    count = 0
+    try:
+        for doc_meta in db.query(DocumentMetadata.doc_id, DocumentMetadata.minhash_signature).filter(DocumentMetadata.minhash_signature.isnot(None)).all():
+            doc_id, minhash_bytes = doc_meta
+            if minhash_bytes:
+                try:
+                    minhash_obj = MinHash.deserialize(minhash_bytes)
+                    lsh_index.insert(doc_id, minhash_obj)
+                    count += 1
+                except Exception as e: # More specific exceptions can be caught if needed
+                    logger.error(f"Error deserializing or inserting MinHash for doc_id {doc_id}: {e}")
+        logger.info(f"LSH index rebuilt with {count} entries from database.")
+    except Exception as e:
+        logger.error(f"Error querying MinHash signatures from database: {e}", exc_info=True)
+
+
+def get_lsh_index_instance() -> MinHashLSH:
+    """
+    Loads the LSH index from disk. 
+    If the file doesn't exist, returns a new, empty LSH index and logs a warning.
+    The periodic Celery task is responsible for creating and populating the index file.
+    """
+    if os.path.exists(LSH_INDEX_FILE):
+        try:
+            with open(LSH_INDEX_FILE, 'rb') as f:
+                logger.info(f"Loading LSH index from {LSH_INDEX_FILE}")
+                return pickle.load(f)
+        except Exception as e:
+            logger.error(f"Error loading LSH index from {LSH_INDEX_FILE}: {e}. Returning an empty index.")
+            # Fall through to returning a new, empty index
+    else:
+        logger.warning(f"LSH index file not found at {LSH_INDEX_FILE}. Returning an empty index. The rebuild task should create this file.")
+    
+    # Return a new, empty LSH index if loading failed or file not found
+    return create_lsh_index(threshold=JACCARD_THRESHOLD, num_perm=NUM_PERM)
+
+
+def save_lsh_index_instance(lsh_index: MinHashLSH) -> None:
+    """
+    Saves the given LSH index to disk using a temporary file for atomic-like operation.
+    """
+    temp_file_path = LSH_INDEX_FILE + ".tmp"
+    try:
+        with open(temp_file_path, 'wb') as f_temp:
+            pickle.dump(lsh_index, f_temp)
+        os.rename(temp_file_path, LSH_INDEX_FILE) # Atomic on POSIX if src and dest are on the same filesystem
+        logger.info(f"LSH index saved to {LSH_INDEX_FILE}")
+    except Exception as e:
+        logger.error(f"Error saving LSH index to {LSH_INDEX_FILE}: {e}", exc_info=True)
+        # Attempt to clean up temp file if an error occurred
+        if os.path.exists(temp_file_path):
+            try:
+                os.remove(temp_file_path)
+                logger.info(f"Removed temporary LSH index file: {temp_file_path}")
+            except OSError as rm_err:
+                logger.error(f"Error removing temporary LSH index file {temp_file_path}: {rm_err}")
 
 
 def query_lsh_index(lsh_index: MinHashLSH, minhash: MinHash) -> List[str]:
     """
-    Query the LSH index for similar documents.
+    Query the in-memory LSH index for similar documents.
     
     Args:
         lsh_index: LSH index
@@ -148,7 +212,12 @@ def query_lsh_index(lsh_index: MinHashLSH, minhash: MinHash) -> List[str]:
     Returns:
         List of similar document IDs
     """
-    return lsh_index.query(minhash)
+    # Lock removed, operates on in-memory index.
+    if minhash:
+        return lsh_index.query(minhash)
+    else:
+        logger.warning("Attempted to query LSH index with None MinHash. Returning empty list.")
+        return []
 
 
 def compute_page_hashes(pdf_path: str) -> List[str]:
@@ -220,12 +289,13 @@ def fingerprint_document(pdf_path: str) -> Dict[str, Any]:
         page_hashes = [compute_page_hash(page) for page in pages if page]
         
         # Get MinHash
-        minhash = get_minhash(text)
+        minhash_obj = get_minhash(text)
+        serialized_minhash = minhash_obj.leanbytes() if minhash_obj else None
         
         return {
             "hash": doc_hash,
             "page_hashes": page_hashes,
-            "minhash": minhash,
+            "minhash": serialized_minhash,
             "num_pages": len(pages)
         }
     except Exception as e:

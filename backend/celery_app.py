@@ -18,7 +18,9 @@ app = Celery(
     backend=result_backend_url,
     include=[
         'backend.tasks.pipeline_tasks', # We will create this file for orchestrator tasks
-        'backend.tasks.clustering_tasks'  # We will create this for clustering tasks
+        'backend.tasks.clustering_tasks',  # We will create this for clustering tasks
+        'backend.tasks.lsh_tasks', # Added LSH tasks module
+        'backend.tasks.vectorizer_tasks' # Added TF-IDF vectorizer tasks module
     ]
 )
 
@@ -32,6 +34,23 @@ app.conf.update(
     # Add other configurations as needed
     # Example: task_acks_late = True, worker_prefetch_multiplier = 1
 )
+
+# Celery Beat Schedule
+app.conf.beat_schedule = {
+    'rebuild-lsh-every-5-minutes': {
+        'task': 'tasks.rebuild_global_lsh_index',
+        'schedule': 300.0,  # 300 seconds = 5 minutes
+    },
+    'manage-tfidf-vectorizer-daily': { # Added schedule for TF-IDF vectorizer management
+        'task': 'tasks.manage_tfidf_vectorizer',
+        'schedule': 86400.0,  # 86400 seconds = 24 hours
+        'args': (False,) # Corresponds to force_refit=False. Change to True to force refit on schedule.
+    },
+    'run-dbscan-clustering-periodically': { # Added schedule for periodic DBSCAN clustering
+        'task': 'clustering.run_dbscan', # Name defined in @app.task decorator
+        'schedule': 21600.0,  # 21600 seconds = 6 hours
+    },
+}
 
 # If you want Celery to automatically discover tasks in files named tasks.py in your INSTALLED_APPS (Django style)
 # or in the include paths, you can use autodiscover_tasks. Explicit include is often clearer.
