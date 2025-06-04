@@ -188,3 +188,22 @@ class PageSimilarityQuery(BaseModel):
     text: str
     threshold: float = 0.85
     max_results: int = 10
+
+
+class PageMedicalAnalysisDetail(BaseModel):
+    page_num: int
+    is_medical: bool
+    medical_confidence: float
+    specialty: Optional[str] = None
+    terms_count: int
+    extracted_terms: List[str]
+
+
+class DocumentMedicalAnalysisResponse(BaseModel):
+    doc_id: str
+    filename: str
+    overall_specialty: Optional[str] = None
+    total_pages_analyzed: int
+    medical_pages_count: int
+    average_medical_confidence: float
+    pages_analysis: List[PageMedicalAnalysisDetail]

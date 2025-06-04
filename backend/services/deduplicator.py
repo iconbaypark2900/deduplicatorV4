@@ -6,9 +6,10 @@ Provides methods for detecting exact and near-duplicate documents and pages.
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union, Any
 import os
-import json
 import logging
 
+from sqlalchemy.orm import Session
+from utils.database import get_db, DocumentMetadata
 from similarity.engine import SimilarityEngine
 from similarity.hashing import compute_document_hash, get_minhash
 from ingestion.pdf_reader import extract_text_from_pdf, extract_pages_from_pdf
@@ -33,39 +34,19 @@ class DuplicateService:
     def __init__(self):
         """Initialize the duplicate detection service."""
         self.engine = SimilarityEngine()
-        self.hash_log_path = "storage/metadata/hash_set.json"
         
         # Ensure storage directories exist
-        os.makedirs("storage/metadata", exist_ok=True)
         os.makedirs("storage/documents/unique", exist_ok=True)
         os.makedirs("storage/documents/deduplicated", exist_ok=True)
         os.makedirs("storage/documents/flagged_for_review", exist_ok=True)
 
-    def _load_hash_log(self) -> set:
-        """Load previously seen document hashes."""
-        if os.path.exists(self.hash_log_path):
-            try:
-                with open(self.hash_log_path, "r") as f:
-                    content = f.read().strip()
-                    return set(json.loads(content)) if content else set()
-            except Exception as e:
-                logger.error(f"Error loading hash log: {e}")
-        return set()
-
-    def _save_hash_log(self, hashes: set) -> None:
-        """Save the updated hash log."""
-        try:
-            with open(self.hash_log_path, "w") as f:
-                json.dump(list(hashes), f)
-        except Exception as e:
-            logger.error(f"Error saving hash log: {e}")
-
-    def check_exact_duplicate(self, pdf_path: Union[str, Path]) -> bool:
+    def check_exact_duplicate(self, pdf_path: Union[str, Path], db: Session) -> bool:
         """
         Check if a document is an exact duplicate using SHA256 hash.
         
         Args:
             pdf_path: Path to the PDF file
+            db: SQLAlchemy Session
             
         Returns:
             bool: True if the document is an exact duplicate
@@ -74,27 +55,9 @@ class DuplicateService:
         if not doc_hash:
             return False
             
-        seen_hashes = self._load_hash_log()
-        return doc_hash in seen_hashes
-
-    def add_to_hash_log(self, pdf_path: Union[str, Path]) -> Optional[str]:
-        """
-        Compute a document's hash and add it to the hash log.
-        
-        Args:
-            pdf_path: Path to the PDF file
-            
-        Returns:
-            str: The computed hash, or None if extraction failed
-        """
-        doc_hash = compute_document_hash(str(pdf_path))
-        if not doc_hash:
-            return None
-            
-        seen_hashes = self._load_hash_log()
-        seen_hashes.add(doc_hash)
-        self._save_hash_log(seen_hashes)
-        return doc_hash
+        # Query the database for an existing document with this hash
+        existing_document = db.query(DocumentMetadata).filter(DocumentMetadata.content_hash == doc_hash).first()
+        return existing_document is not None
 
     def find_match(self, text: str, threshold: float = 0.85) -> Dict[str, Optional[dict]]:
         """

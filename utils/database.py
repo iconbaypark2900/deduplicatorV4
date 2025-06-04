@@ -6,7 +6,7 @@ from sqlalchemy.orm import sessionmaker, Session, relationship
 from contextlib import contextmanager
 import datetime
 import pickle # For vector serialization if not handled elsewhere
-from typing import Optional, Generator
+from typing import Optional, Generator, List
 
 from utils.config import settings # To get DATABASE_URL
 
@@ -67,6 +67,7 @@ class DocumentMetadata(Base): # type: ignore
 
     doc_id = Column(String, primary_key=True, index=True)
     filename = Column(String, nullable=False)
+    file_path = Column(String, nullable=True)
     upload_timestamp = Column(DateTime, default=datetime.datetime.utcnow)
     last_processed_timestamp = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
     status = Column(String, index=True, nullable=True)
@@ -318,6 +319,10 @@ def get_document_by_hash(db: Session, content_hash: str) -> Optional[DocumentMet
         logger.error(f"Error fetching document by hash {content_hash[:10]}...: {e}", exc_info=True)
         return None
 
+def get_recent_document_metadata(db: Session, limit: int = 10) -> List[DocumentMetadata]:
+    """Retrieves the most recent document metadata entries, ordered by upload_timestamp."""
+    return db.query(DocumentMetadata).order_by(DocumentMetadata.upload_timestamp.desc()).limit(limit).all()
+
 # --- CRUD Helper Functions for Page ---
 
 def create_page(db: Session, document_id: str, page_number: int, page_hash: str, 
@@ -395,6 +400,41 @@ def update_page(db: Session, page_id: int, **kwargs) -> Optional[Page]:
     logger.warning(f"Page with id {page_id} not found for update.")
     return None
 
+def get_page_by_hash(db: Session, page_hash: str) -> Optional[Page]:
+    """Gets a page by its hash."""
+    return db.query(Page).filter(Page.page_hash == page_hash).first()
+
+def create_page_duplicate(db: Session, source_page_id: int, duplicate_page_id: int, similarity: float = 1.0) -> PageDuplicate:
+    """Creates a PageDuplicate relationship."""
+    db_page_duplicate = PageDuplicate(
+        source_page_id=source_page_id,
+        duplicate_page_id=duplicate_page_id,
+        similarity=similarity
+    )
+    db.add(db_page_duplicate)
+    db.flush() 
+    logger.info(f"Created PageDuplicate entry: source {source_page_id} -> duplicate {duplicate_page_id}")
+    return db_page_duplicate
+
+def get_duplicates_for_page(db: Session, source_page_id: int) -> List[Page]:
+    """
+    Retrieves all Page objects that are duplicates of the given source_page_id.
+    """
+    duplicate_relationships = db.query(PageDuplicate).filter(PageDuplicate.source_page_id == source_page_id).all()
+    
+    duplicate_page_ids = [rel.duplicate_page_id for rel in duplicate_relationships]
+    
+    if not duplicate_page_ids:
+        return []
+        
+    duplicate_pages = db.query(Page).filter(Page.id.in_(duplicate_page_ids)).all()
+    return duplicate_pages
+
+def search_pages_by_snippet(db: Session, query: str, max_results: int = 10) -> List[Page]:
+    """Searches pages by text snippet (case-insensitive LIKE query)."""
+    if not query:
+        return []
+    return db.query(Page).filter(Page.text_snippet.ilike(f"%{query}%")).limit(max_results).all()
 
 # --- CRUD Helper Functions for User ---
 
@@ -460,3 +500,42 @@ def get_review_history_for_document(db: Session, document_id: str) -> list[Revie
         return []
 
 # (The vector CRUD functions are now mostly in similarity/tfidf.py but they will use get_db())
+
+def create_page_review_decision(
+    db: Session, 
+    page_id: int, 
+    user_id: int, 
+    decision: str, 
+    notes: Optional[str] = None,
+    reviewed_at: Optional[datetime.datetime] = None
+) -> PageReviewDecision:
+    """Creates a PageReviewDecision entry."""
+    if reviewed_at is None:
+        reviewed_at = datetime.datetime.utcnow()
+        
+    db_review_decision = PageReviewDecision(
+        page_id=page_id,
+        user_id=user_id,
+        decision=decision,
+        notes=notes,
+        review_timestamp=reviewed_at
+    )
+    db.add(db_review_decision)
+    db.flush()
+    
+    # Also update the Page status to reflect the latest decision
+    page = db.query(Page).filter(Page.id == page_id).first()
+    if page:
+        page.status = decision
+        # page.reviewed_by = user_id # If we add a reviewed_by FK to User on Page model
+        # page.review_notes = notes # If we add review_notes on Page model
+        # page.reviewed_at = reviewed_at # If we add reviewed_at on Page model
+        db.add(page)
+        logger.info(f"Page {page_id} status updated to {decision} by user {user_id}")
+
+    logger.info(f"Created PageReviewDecision for page {page_id} by user {user_id} with decision {decision}")
+    return db_review_decision
+
+def get_review_decisions_for_page(db: Session, page_id: int) -> List[PageReviewDecision]:
+    """Retrieves all review decisions for a specific page, ordered by most recent first."""
+    return db.query(PageReviewDecision).filter(PageReviewDecision.page_id == page_id).order_by(PageReviewDecision.review_timestamp.desc()).all()

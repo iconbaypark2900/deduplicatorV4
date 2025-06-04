@@ -2,7 +2,7 @@
 Upload API endpoints for handling file uploads and analysis.
 """
 
-from fastapi import APIRouter, UploadFile, HTTPException, File, Form
+from fastapi import APIRouter, UploadFile, HTTPException, File, Form, Depends
 from backend.services.extractor import extract_text_and_pages
 from similarity.tfidf import analyze_document_pages
 from backend.services.logger import log_upload
@@ -13,7 +13,8 @@ from utils.duplicate_analysis import (
 )
 from utils.page_tracker import update_page_hash_map
 from similarity.engine import SimilarityEngine
-import json
+from utils.database import get_db, DocumentMetadata, Page, PageDuplicate, upsert_document_metadata, create_page, create_page_duplicate
+from sqlalchemy.orm import Session
 import uuid
 import os
 from datetime import datetime
@@ -24,15 +25,12 @@ import logging
 # Set up logging
 logger = logging.getLogger(__name__)
 
-# File paths
-DOCUMENT_METADATA_PATH = "storage/metadata/document_metadata.json"
-
 # Create router
 router = APIRouter(tags=["Upload"])
 
 
 @router.post("/", response_model=UploadResponse)
-async def upload_document(file: UploadFile = File(...)):
+async def upload_document(file: UploadFile = File(...), db: Session = Depends(get_db)):
     """
     Upload and analyze a single document.
     
@@ -130,41 +128,85 @@ async def upload_document(file: UploadFile = File(...)):
             logger.error(f"Page analysis failed: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail=f"Failed to analyze document: {str(e)}")
 
-        # Store document metadata
+        # Store document metadata in the database
         try:
-            logger.debug("Storing document metadata")
-            os.makedirs(os.path.dirname(DOCUMENT_METADATA_PATH), exist_ok=True)
+            logger.debug("Storing document metadata in DB")
             
-            if os.path.exists(DOCUMENT_METADATA_PATH):
-                with open(DOCUMENT_METADATA_PATH, 'r+') as f:
-                    try:
-                        metadata = json.load(f)
-                    except json.JSONDecodeError:
-                        metadata = {}
-            else:
-                metadata = {}
+            # Compute document hash
+            document_content_hash = compute_document_hash(temp_path)
+            if not document_content_hash:
+                logger.warning(f"Could not compute content hash for {file.filename} at {temp_path}. Proceeding without it.")
+                # Decide if this is a critical failure. For now, allow proceeding.
+            
+            # Upsert DocumentMetadata
+            db_document = upsert_document_metadata(
+                db=db,
+                doc_id=doc_id,
+                filename=file.filename,
+                status=status,
+                upload_timestamp=datetime.utcnow(),
+                page_count=len(page_metadata),
+                content_hash=document_content_hash,
+                file_path=temp_path
+            )
+            
+            # Store Page information
+            db_pages = {} # To map page_idx to Page object for duplicate creation
+            for i, p_meta in enumerate(page_metadata):
+                db_page = create_page(
+                    db=db,
+                    document_id=doc_id,
+                    page_number=p_meta["page_num"], # page_metadata is 1-indexed from earlier
+                    page_hash=p_meta["page_hash"],
+                    text_snippet=p_meta["text_snippet"],
+                    # image_paths are already handled by update_page_hash_map for now
+                    # We might need to consolidate this if update_page_hash_map is also refactored
+                )
+                db_pages[i] = db_page # page_metadata used 0-indexed loop for pages_data
+
+            # Store DuplicatePair information
+            # The 'duplicates' list contains page1_idx and page2_idx which are 0-indexed
+            for dup_pair in duplicates:
+                page1_db_id = None
+                page2_db_id = None
+
+                # Find the corresponding Page objects from db_pages
+                # The indices in dup_pair (page1_idx, page2_idx) correspond to the original pages_data list
+                # And page_metadata was created by iterating pages_data with enumerate
                 
-            metadata[doc_id] = {
-                "filename": file.filename,
-                "status": status,
-                "pages": [
-                    {
-                        "hash": page["page_hash"],
-                        "index": i,
-                        "text_snippet": page["text_snippet"]
-                    }
-                    for i, page in enumerate(page_metadata)
-                ],
-                "duplicates": duplicates,
-                "upload_timestamp": datetime.utcnow().isoformat()
-            }
+                # Check if page1_idx and page2_idx are valid keys in db_pages
+                if dup_pair["page1_idx"] in db_pages:
+                    page1_db_id = db_pages[dup_pair["page1_idx"]].id
+                else:
+                    logger.error(f"Could not find page with original index {dup_pair['page1_idx']} in db_pages for doc {doc_id}")
+                    continue
+
+                if dup_pair["page2_idx"] in db_pages:
+                    page2_db_id = db_pages[dup_pair["page2_idx"]].id
+                else:
+                    logger.error(f"Could not find page with original index {dup_pair['page2_idx']} in db_pages for doc {doc_id}")
+                    continue
+                
+                if page1_db_id and page2_db_id:
+                    create_page_duplicate(
+                        db=db,
+                        source_page_id=page1_db_id,
+                        duplicate_page_id=page2_db_id,
+                        similarity=dup_pair["similarity"]
+                    )
+                else:
+                    logger.warning(f"Could not create PageDuplicate for pair {dup_pair} due to missing page IDs.")
             
-            with open(DOCUMENT_METADATA_PATH, 'w') as f:
-                json.dump(metadata, f, indent=2)
+            db.commit() # Commit all changes for this document
+            logger.info(f"Successfully stored metadata for document {doc_id} in DB")
                 
         except Exception as e:
-            logger.error(f"Failed to store metadata: {str(e)}", exc_info=True)
-            logger.warning(f"Failed to store document metadata: {str(e)}")
+            db.rollback() # Rollback in case of error
+            logger.error(f"Failed to store metadata in DB: {str(e)}", exc_info=True)
+            # Not raising HTTPException here to allow logging and response, but original code had a warning
+            # Re-evaluating if this should be a critical failure or just a warning.
+            # For now, let's maintain the original behavior of logging a warning and continuing.
+            logger.warning(f"Failed to store document metadata in DB: {str(e)}")
 
         # Log the upload
         try:

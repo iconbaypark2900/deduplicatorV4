@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     METADATA_PATH: str = Field(default="storage/metadata")
     TEMP_PATH: str = Field(default="storage/tmp")
     
+    # Configurable subpaths for document statuses
+    UNIQUE_DOCS_SUBPATH: str = Field(default="unique", env="UNIQUE_DOCS_SUBPATH")
+    ARCHIVED_DOCS_SUBPATH: str = Field(default="archived", env="ARCHIVED_DOCS_SUBPATH") # Changed from "deduplicated" for consistency
+    FLAGGED_DOCS_SUBPATH: str = Field(default="flagged_for_review", env="FLAGGED_DOCS_SUBPATH")
+    
     # API settings
     HOST: str = Field(default="0.0.0.0", env="API_HOST")
     PORT: int = Field(default=8000, env="API_PORT")

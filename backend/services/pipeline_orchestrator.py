@@ -3,6 +3,7 @@ import logging
 import os
 import uuid
 import pickle # For LSH index
+import shutil # ADDED for file operations
 from typing import Dict, Optional, List
 
 from ingestion.pdf_reader import extract_text_from_pdf, extract_pages_from_pdf
@@ -20,7 +21,7 @@ from similarity.tfidf import (
     tfidf_search as search_tfidf_vectors_in_db,
     load_fitted_tfidf_vectorizer 
 )
-from utils.page_tracker import update_page_hash_map
+from utils.page_tracker import process_document_pages
 from backend.services.logger import log_upload 
 from utils.config import settings # For LSH_THRESHOLD, DOC_SIMILARITY_THRESHOLD
 
@@ -58,14 +59,34 @@ class PipelineOrchestrator:
 
         processing_status = {"doc_id": doc_id, "filename": original_filename, "stages": {}, "final_status": "processing_started"}
         
+        # Define the persistent filename and path
+        # Using doc_id.pdf for consistency and to avoid issues with original_filename characters.
+        persistent_doc_filename = f"{doc_id}.pdf"
+        # New documents will initially be placed in the 'flagged_for_review' subpath.
+        # This path can be changed later by the update_document_status API based on review.
+        initial_persistent_file_path = os.path.join(settings.DOCUMENT_PATH, settings.FLAGGED_DOCS_SUBPATH, persistent_doc_filename)
+        
         # Celery progress update example (if task_self is passed)
         if task_self:
             task_self.update_state(state='PROGRESS', meta={'current_stage': 'InitialSetup', 'progress': 1, 'doc_id': doc_id})
 
         try:
             with get_db() as db:
-                # Initial metadata entry
-                upsert_document_metadata(db, doc_id, filename=original_filename, status="processing_extraction")
+                # Ensure the destination directory exists
+                os.makedirs(os.path.dirname(initial_persistent_file_path), exist_ok=True)
+                
+                # Copy the uploaded file from its temporary location (pdf_path) to the persistent path
+                shutil.copy2(pdf_path, initial_persistent_file_path)
+                logger.info(f"[{doc_id}] Copied uploaded file from {pdf_path} to persistent storage at {initial_persistent_file_path}")
+
+                # Initial metadata entry, now including the file_path
+                upsert_document_metadata(
+                    db, 
+                    doc_id, 
+                    filename=original_filename, # Still store original filename for reference
+                    file_path=initial_persistent_file_path, # Store the path where the file now resides
+                    status="processing_extraction"
+                )
 
             # --- Stage 0: Text Extraction & Initial Page Processing ---
             logger.info(f"[{doc_id}] Stage 0: Extracting text for {original_filename}")
@@ -82,13 +103,27 @@ class PipelineOrchestrator:
             page_texts = extract_pages_from_pdf(pdf_path)
             medical_confidences = [measure_medical_confidence(pt) for pt in page_texts if pt]
             # Using doc_id for page_tracker, assuming it's the central ID
-            update_page_hash_map( 
-                doc_id=doc_id, filename=original_filename, page_texts=page_texts,
-                medical_confidences=medical_confidences, image_paths=[None]*len(page_texts)
-            )
-            processing_status["stages"]["text_extraction"] = "Completed"
+            
+            # The call to page processing is moved into the DB session block below
+            # update_page_hash_map( 
+            #     doc_id=doc_id, filename=original_filename, page_texts=page_texts,
+            #     medical_confidences=medical_confidences, image_paths=[None]*len(page_texts)
+            # )
+            # processing_status["stages"]["text_extraction"] = "Completed" # Moved after DB block
+
             with get_db() as db:
+                # Process pages and store them in the database
+                process_document_pages( 
+                    db=db,
+                    doc_id=doc_id, 
+                    page_texts=page_texts,
+                    medical_confidences=medical_confidences, # process_document_pages handles length alignment
+                    image_paths=[None]*len(page_texts)    # process_document_pages handles length alignment
+                )
+                # Update document metadata after successful page processing
                 upsert_document_metadata(db, doc_id, status="processing_hash_check", page_count=len(page_texts))
+            
+            processing_status["stages"]["text_extraction"] = "Completed"
 
 
             # --- Stage 1: Exact Duplicate Check (Hash Check) ---
@@ -205,7 +240,7 @@ class PipelineOrchestrator:
             processing_status["final_status"] = "error_pipeline_critical"
             try:
                 with get_db() as db:
-                    upsert_document_metadata(db, doc_id, status="error_pipeline_critical", filename=original_filename) # Ensure filename is set on error
+                    upsert_document_metadata(db, doc_id, status="error_pipeline_critical", filename=original_filename, file_path=initial_persistent_file_path if 'initial_persistent_file_path' in locals() else None) # Ensure file_path is logged on error if available
             except Exception as db_err:
                 logger.error(f"[{doc_id}] Failed to log critical error to DB: {db_err}")
             log_upload(doc_id, original_filename, "error_pipeline_critical")
