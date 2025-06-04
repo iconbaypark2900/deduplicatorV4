@@ -3,17 +3,22 @@ PDF text extraction utilities.
 Provides functions for extracting text from PDF documents.
 """
 
+import os
+import io
 import fitz  # PyMuPDF
+import pytesseract
+from PIL import Image
 from tenacity import retry, stop_after_attempt, wait_fixed
 from typing import List, Optional, Generator, Dict
 import logging
 from ingestion.preprocessing import normalize_medical_text
+from utils.config import settings
 
 # Configure logging
 logger = logging.getLogger(__name__)
 
 
-def extract_page_text(page: fitz.Page) -> str:
+def extract_page_text(page: fitz.Page, ocr_dpi: int = settings.OCR_DPI) -> str:
     """
     Try different text extraction methods to get content from a page.
     
@@ -37,17 +42,31 @@ def extract_page_text(page: fitz.Page) -> str:
     if not text.strip():
         logger.debug("JSON mode failed, trying raw mode")
         text = page.get_text("raw")  # Try raw mode as last resort
-    
+
+    if not text.strip():
+        logger.debug("Raw mode failed, attempting OCR")
+        try:
+            pix = page.get_pixmap(dpi=ocr_dpi)
+            img_bytes = pix.tobytes("png")
+            image = Image.open(io.BytesIO(img_bytes))
+            text = pytesseract.image_to_string(image, lang=settings.OCR_LANGUAGE)
+        except Exception as e:
+            logger.error(
+                f"OCR failed on page {page.number + 1 if hasattr(page, 'number') else ''}: {e}"
+            )
+            text = ""
+
     return text
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
-def extract_text_from_pdf(pdf_path: str) -> str:
+def extract_text_from_pdf(pdf_path: str, ocr_dpi: int = settings.OCR_DPI) -> str:
     """
     Extract and normalize text from entire PDF file.
     
     Args:
         pdf_path: Path to the PDF file
+        ocr_dpi: DPI setting when performing OCR on image-based pages
         
     Returns:
         Normalized text from the PDF
@@ -60,7 +79,7 @@ def extract_text_from_pdf(pdf_path: str) -> str:
         texts = []
         
         for page in doc:
-            text = extract_page_text(page)
+            text = extract_page_text(page, ocr_dpi=ocr_dpi)
             if text.strip():
                 texts.append(text)
             else:
@@ -81,12 +100,13 @@ def extract_text_from_pdf(pdf_path: str) -> str:
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
-def extract_pages_from_pdf(pdf_path: str) -> List[str]:
+def extract_pages_from_pdf(pdf_path: str, ocr_dpi: int = settings.OCR_DPI) -> List[str]:
     """
     Extract and normalize text from PDF file page by page.
     
     Args:
         pdf_path: Path to the PDF file
+        ocr_dpi: DPI setting when performing OCR on image-based pages
         
     Returns:
         List of normalized page texts
@@ -102,7 +122,7 @@ def extract_pages_from_pdf(pdf_path: str) -> List[str]:
         logger.debug(f"Found {page_count} pages in PDF")
         
         for i, page in enumerate(doc):
-            text = extract_page_text(page)
+            text = extract_page_text(page, ocr_dpi=ocr_dpi)
             logger.debug(f"Extracted {len(text)} characters from page {i+1}")
             
             if not text.strip():
