@@ -16,6 +16,7 @@ from datetime import datetime
 from backend.models.schemas import (
     DocumentAnalysis,
     DocumentStatusUpdate,
+    DocumentStatusResponse,
     RebuildRequest,
     PageInfo,
     DuplicatePair,
@@ -177,6 +178,33 @@ async def get_document_analysis(doc_id: str, db: Session = Depends(get_db)): # M
     except Exception as e:
         logger.error(f"Error retrieving document analysis: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error retrieving document analysis: {str(e)}")
+
+
+@router.get("/{doc_id}/status", response_model=DocumentStatusResponse)
+async def get_document_status(doc_id: str, task_id: Optional[str] = Query(None), db: Session = Depends(get_db)):
+    """Retrieve the current processing status for a document."""
+    doc_meta = get_document_metadata_by_id(db, doc_id)
+    if doc_meta:
+        return {
+            "doc_id": doc_id,
+            "status": doc_meta.status,
+            "task_state": "SUCCESS",
+        }
+    task_state = None
+    if task_id:
+        try:
+            from celery.result import AsyncResult
+            from backend.celery_app import app as celery_app
+            async_res = AsyncResult(task_id, app=celery_app)
+            task_state = async_res.state
+        except Exception as e:
+            logger.warning(f"Failed to fetch Celery task state for {task_id}: {e}")
+    return {
+        "doc_id": doc_id,
+        "status": None,
+        "task_state": task_state or "PENDING",
+        "message": "Document not yet registered in database",
+    }
 
 
 @router.post("/{doc_id}/status")
