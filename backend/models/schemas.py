@@ -52,6 +52,12 @@ class DuplicatePair(BaseModel):
     similarity: float
 
 
+class IntraDocTFIDFResponse(BaseModel):
+    """Response model for intra-document TF-IDF analysis."""
+    doc_id: str
+    highSimilarityPairs: List[DuplicatePair]
+
+
 class UploadResponse(BaseModel):
     """
     Response returned after document upload and analysis.

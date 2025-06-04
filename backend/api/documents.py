@@ -13,12 +13,22 @@ from typing import List, Dict, Optional, Any
 from datetime import datetime
 
 # MODIFIED: Added PageInfo for DocumentAnalysis.pages type hint
-from backend.models.schemas import DocumentAnalysis, DocumentStatusUpdate, RebuildRequest, PageInfo, DuplicatePair, ReviewHistoryEntry, ReviewStatus
+from backend.models.schemas import (
+    DocumentAnalysis,
+    DocumentStatusUpdate,
+    RebuildRequest,
+    PageInfo,
+    DuplicatePair,
+    ReviewHistoryEntry,
+    ReviewStatus,
+    IntraDocTFIDFResponse,
+)
 # MODIFIED: Updated page_tracker import
 from utils.page_tracker import get_all_pages_for_document, get_page_info_by_hash
 # from backend.services.rebuilder import rebuild_from_unique_pages, merge_documents # merge_documents not used, rebuild_from_unique_pages is different from rebuild_document
 from backend.services.rebuilder import rebuild_document as service_rebuild_document # Aliased to avoid conflict
 from utils.config import settings
+from similarity.tfidf import analyze_document_pages as tfidf_analyze_document_pages
 
 # ADDED: Database imports
 from sqlalchemy.orm import Session
@@ -34,7 +44,9 @@ from utils.database import (
     get_review_history_for_document,
     get_user_by_username,
     get_recent_document_metadata, # Added this function
-    upsert_document_metadata # For updating file_path and status
+    upsert_document_metadata, # For updating file_path and status
+    get_pages_by_document_id,
+    create_page_duplicate,
 )
 
 
@@ -452,8 +464,38 @@ async def get_recent_documents(limit: int = 10, db: Session = Depends(get_db)):
                 "page_count": page_count,
                 "duplicate_count": duplicate_count # Needs clarification on what this count represents
             })
-            
+
         return response_list
     except Exception as e:
         logger.error(f"Error retrieving recent documents from database: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error retrieving recent documents: {str(e)}")
+
+
+@router.get("/{doc_id}/analyze-internal-pages", response_model=IntraDocTFIDFResponse)
+async def analyze_internal_pages(
+    doc_id: str,
+    threshold: float = 0.85,
+    persist: bool = False,
+    db: Session = Depends(get_db),
+):
+    """Analyze stored pages of a document for internal similarities using TF-IDF."""
+    pages = get_pages_by_document_id(db, doc_id)
+    if not pages:
+        raise HTTPException(status_code=404, detail=f"Document {doc_id} not found or has no pages")
+
+    page_texts = [p.text_snippet or "" for p in pages]
+    tfidf_pairs = tfidf_analyze_document_pages(page_texts, threshold=threshold)
+
+    results = [
+        DuplicatePair(page1_idx=p["page1_idx"], page2_idx=p["page2_idx"], similarity=float(p["similarity"]))
+        for p in tfidf_pairs
+    ]
+
+    if persist:
+        for p in tfidf_pairs:
+            p1_id = pages[p["page1_idx"]].id
+            p2_id = pages[p["page2_idx"]].id
+            create_page_duplicate(db, p1_id, p2_id, similarity=float(p["similarity"]))
+        db.commit()
+
+    return {"doc_id": doc_id, "highSimilarityPairs": results}

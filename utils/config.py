@@ -4,7 +4,7 @@ Uses Pydantic for settings management and validation.
 """
 
 import os
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
 from typing import List, Dict, Optional, Any
 from dotenv import load_dotenv
@@ -68,6 +68,9 @@ class Settings(BaseSettings):
     REDIS_PORT: int = Field(default=6379, env="REDIS_PORT")
     CELERY_BROKER_URL: Optional[str] = Field(default=None, env="CELERY_BROKER_URL")
     CELERY_RESULT_BACKEND: Optional[str] = Field(default=None, env="CELERY_RESULT_BACKEND")
+
+    # Database settings
+    DATABASE_URL: str = Field(default="sqlite:///./test.db", env="DATABASE_URL")
     
     # Processing limits
     MAX_BATCH_SIZE: int = Field(default=100, env="MAX_BATCH_SIZE")
@@ -79,10 +82,12 @@ class Settings(BaseSettings):
     # Thumbnail generation
     THUMBNAIL_SIZE: tuple = Field(default=(200, 200))
     
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = True
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=True,
+        extra="ignore",
+    )
 
 
 # Create global settings instance

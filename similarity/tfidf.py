@@ -156,11 +156,16 @@ def _load_vectorizer() -> Optional[TfidfVectorizer]:
         except Exception as e:
             logger.error(f"Error loading or validating vectorizer from {VECTORIZER_FILE}: {e}. Returning None.", exc_info=True)
             VECTORIZER = None # Clear cache on error
-            return None
+        return None
     else:
         logger.warning(f"Vectorizer file {VECTORIZER_FILE} not found. No TF-IDF vectorizer available. Run the vectorizer management task.")
         VECTORIZER = None # Ensure cache is clear
         return None
+
+
+def load_fitted_tfidf_vectorizer() -> Optional[TfidfVectorizer]:
+    """Public wrapper for loading the fitted TF-IDF vectorizer."""
+    return _load_vectorizer()
 
 
 def _save_vectorizer(vectorizer: TfidfVectorizer) -> None:
