@@ -80,11 +80,17 @@ export const documentService = {
     formData.append('chunk_type', settings.chunkType);
     formData.append('similarity_threshold', settings.similarityThreshold.toString());
     
-    const response = await api.post('/upload/batch-folder', formData, {
+    const response = await api.post('/upload/batch', formData, {
       headers: { 'Content-Type': 'multipart/form-data' }
     });
-    
-    return response.data;
+
+    const data = response.data;
+    const duplicates = data.duplicates || data.results || [];
+    return {
+      total_documents: data.total_documents,
+      duplicates_found: data.duplicates_found ?? duplicates.length,
+      results: duplicates
+    } as BatchFolderResponse;
   },
   
   /**
@@ -115,6 +121,16 @@ export const documentService = {
       timeout: 300000 // 5 minutes timeout for large documents
     });
     
+    return response.data;
+  },
+
+  /**
+   * Analyze stored document pages by doc_id
+   */
+  async analyzeStoredDocument(docId: string, threshold: number): Promise<any> {
+    const response = await api.get(`/documents/${docId}/analyze-internal-pages`, {
+      params: { threshold }
+    });
     return response.data;
   },
   

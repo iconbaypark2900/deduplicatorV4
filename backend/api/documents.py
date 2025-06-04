@@ -483,7 +483,7 @@ async def analyze_internal_pages(
     if not pages:
         raise HTTPException(status_code=404, detail=f"Document {doc_id} not found or has no pages")
 
-    page_texts = [p.text_snippet or "" for p in pages]
+    page_texts = [p.full_page_text or p.text_snippet or "" for p in pages]
     tfidf_pairs = tfidf_analyze_document_pages(page_texts, threshold=threshold)
 
     results = [

@@ -107,6 +107,7 @@ class Page(Base): # type: ignore
     page_number = Column(Integer, nullable=False)
     page_hash = Column(String, nullable=False, index=True)
     text_snippet = Column(Text, nullable=True)
+    full_page_text = Column(Text, nullable=True)
     page_image_path = Column(String, nullable=True)
     medical_confidence = Column(Float, nullable=True)
     duplicate_confidence = Column(Float, nullable=True)
@@ -325,8 +326,9 @@ def get_recent_document_metadata(db: Session, limit: int = 10) -> List[DocumentM
 
 # --- CRUD Helper Functions for Page ---
 
-def create_page(db: Session, document_id: str, page_number: int, page_hash: str, 
-                text_snippet: Optional[str] = None, 
+def create_page(db: Session, document_id: str, page_number: int, page_hash: str,
+                text_snippet: Optional[str] = None,
+                full_page_text: Optional[str] = None,
                 page_image_path: Optional[str] = None,
                 medical_confidence: Optional[float] = None,
                 duplicate_confidence: Optional[float] = None,
@@ -338,6 +340,7 @@ def create_page(db: Session, document_id: str, page_number: int, page_hash: str,
         page_number=page_number,
         page_hash=page_hash,
         text_snippet=text_snippet,
+        full_page_text=full_page_text,
         page_image_path=page_image_path,
         medical_confidence=medical_confidence,
         duplicate_confidence=duplicate_confidence,
