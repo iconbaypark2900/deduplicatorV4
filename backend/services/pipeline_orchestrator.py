@@ -247,11 +247,14 @@ class PipelineOrchestrator:
             # Celery task failure is handled by the calling Celery task in pipeline_tasks.py
             return {"status": "error", "message": str(e), **processing_status}
         finally:
-            # pdf_path is usually a temporary path created by the caller (e.g., API endpoint)
-            # The caller should be responsible for cleaning it up.
-            # If the orchestrator itself creates a copy, then it should clean it.
+            # Ensure the temporary upload file is removed after processing
+            try:
+                if pdf_path and os.path.exists(pdf_path):
+                    os.remove(pdf_path)
+                    logger.debug(f"[{doc_id}] Deleted temporary file {pdf_path}")
+            except Exception as cleanup_err:
+                logger.warning(f"[{doc_id}] Failed to delete temporary file {pdf_path}: {cleanup_err}")
             logger.debug(f"[{doc_id}] Orchestrator finished processing for {pdf_path}")
-            pass
 
 # Example of how this might be used if not a Celery task directly:
 # if __name__ == '__main__':
