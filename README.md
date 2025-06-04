@@ -34,7 +34,7 @@ The system consists of:
 - Python 3.8+
 - Node.js 14+
 - PyTorch (for embeddings)
-- Tesseract OCR (for image text extraction)
+- Tesseract OCR (for image text extraction). Install the `tesseract-ocr` package and ensure the `tesseract` command is on your `PATH`.
 
 ## Installation
 
@@ -62,6 +62,7 @@ The system consists of:
    cp .env.example .env
    # Edit .env with your settings
    ```
+   The `.env` file includes an `ENABLE_OCR` option to toggle OCR processing. Set it to `false` if Tesseract is not installed.
 
 5. Create storage directories:
    ```bash
