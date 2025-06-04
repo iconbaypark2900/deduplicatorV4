@@ -3,6 +3,7 @@ import {
   DocumentAnalysis,
   PageMetadata,
   UploadResponse,
+  UploadTaskResponse,
   ReviewRequest,
   PageMetadataResponse,
   BatchFolderResponse,
@@ -17,14 +18,14 @@ export const documentService = {
   /**
    * Upload a single document for analysis
    */
-  async uploadDocument(file: File): Promise<UploadResponse> {
+  async uploadDocument(file: File): Promise<UploadTaskResponse> {
     const formData = new FormData();
     formData.append('file', file);
     
     const response = await api.post('/upload', formData, {
       headers: { 'Content-Type': 'multipart/form-data' }
     });
-    
+
     return response.data;
   },
   
