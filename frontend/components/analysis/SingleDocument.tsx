@@ -34,20 +34,23 @@ export default function SingleDocument({ settings, onComplete }: Props) {
     try {
       const task: UploadTaskResponse = await documentService.uploadDocument(file);
 
-      let analysis: DocumentAnalysis | null = null;
-      for (let i = 0; i < 20; i++) {
+      // Poll document status until processing is complete
+      for (let i = 0; i < 30; i++) {
+        await new Promise((r) => setTimeout(r, 2000));
         try {
-          await new Promise((r) => setTimeout(r, 2000));
-          analysis = await documentService.getAnalysis(task.doc_id);
-          if (analysis) break;
+          const status = await documentService.getDocumentStatus(task.doc_id, task.task_id);
+          if (
+            (status.status && !status.status.startsWith('processing')) ||
+            status.task_state === 'SUCCESS'
+          ) {
+            break;
+          }
         } catch {
-          /* Wait and retry */
+          /* Ignore errors and retry */
         }
       }
 
-      if (!analysis) {
-        throw new Error('Timed out waiting for analysis');
-      }
+      const analysis: DocumentAnalysis = await documentService.getAnalysis(task.doc_id);
 
       const baseResult: UploadResponse = {
         doc_id: analysis.doc_id,

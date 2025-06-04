@@ -4,6 +4,7 @@ import {
   PageMetadata,
   UploadResponse,
   UploadTaskResponse,
+  DocumentStatus,
   ReviewRequest,
   PageMetadataResponse,
   BatchFolderResponse,
@@ -34,6 +35,16 @@ export const documentService = {
    */
   async getAnalysis(documentId: string): Promise<DocumentAnalysis> {
     const response = await api.get(`/documents/${documentId}/analysis`);
+    return response.data;
+  },
+
+  /**
+   * Get processing status for a document
+   */
+  async getDocumentStatus(docId: string, taskId?: string): Promise<DocumentStatus> {
+    const response = await api.get(`/documents/${docId}/status`, {
+      params: taskId ? { task_id: taskId } : undefined
+    });
     return response.data;
   },
   

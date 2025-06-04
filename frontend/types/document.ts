@@ -73,6 +73,13 @@ export interface PageInfo {
     doc_id: string;
     task_id: string;
   }
+
+  export interface DocumentStatus {
+    doc_id: string;
+    status?: string | null;
+    task_state?: string | null;
+    message?: string | null;
+  }
   
   export interface ReviewRequest {
     doc_id: string;
