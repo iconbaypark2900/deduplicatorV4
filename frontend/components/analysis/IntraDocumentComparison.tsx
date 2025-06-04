@@ -63,7 +63,7 @@ export default function IntraDocumentComparison({ onComplete }: Props) {
       
       // Fix image URLs - convert relative URLs to absolute URLs
       if (result.pages) {
-        result.pages = result.pages.map(page => ({
+        result.pages = result.pages.map((page: PageData) => ({
           ...page,
           imageUrl: getAbsoluteApiUrl(page.imageUrl)
         }));
@@ -81,8 +81,8 @@ export default function IntraDocumentComparison({ onComplete }: Props) {
         
         for (const pair of result.highSimilarityPairs) {
           // Get the image URLs from the results
-          const page1 = result.pages.find(p => p.pageNumber === pair.page1);
-          const page2 = result.pages.find(p => p.pageNumber === pair.page2);
+          const page1 = result.pages.find((p: PageData) => p.pageNumber === pair.page1);
+          const page2 = result.pages.find((p: PageData) => p.pageNumber === pair.page2);
           
           if (!page1 || !page2) {
             console.error(`Couldn't find page data for page ${pair.page1} or ${pair.page2}`);
@@ -285,7 +285,7 @@ export default function IntraDocumentComparison({ onComplete }: Props) {
                     </div>
                     <div className="border border-gray-700 rounded-lg overflow-hidden">
                       <img
-                        src={results.pages.find(p => p.pageNumber === results.highSimilarityPairs[currentPair].page1)?.imageUrl}
+                        src={results.pages.find((p: PageData) => p.pageNumber === results.highSimilarityPairs[currentPair].page1)?.imageUrl}
                         alt={`Page ${results.highSimilarityPairs[currentPair].page1}`}
                         className="w-full h-auto"
                       />
@@ -304,7 +304,7 @@ export default function IntraDocumentComparison({ onComplete }: Props) {
                     </div>
                     <div className="border border-gray-700 rounded-lg overflow-hidden">
                       <img
-                        src={results.pages.find(p => p.pageNumber === results.highSimilarityPairs[currentPair].page2)?.imageUrl}
+                        src={results.pages.find((p: PageData) => p.pageNumber === results.highSimilarityPairs[currentPair].page2)?.imageUrl}
                         alt={`Page ${results.highSimilarityPairs[currentPair].page2}`}
                         className="w-full h-auto"
                       />
@@ -326,7 +326,7 @@ export default function IntraDocumentComparison({ onComplete }: Props) {
                     <th className="px-3 py-2 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
                       
                     </th>
-                    {results.pages.map((page) => (
+                    {results.pages.map((page: PageData) => (
                       <th key={page.pageNumber} className="px-3 py-2 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">
                         Page {page.pageNumber}
                       </th>
@@ -334,16 +334,17 @@ export default function IntraDocumentComparison({ onComplete }: Props) {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-700">
-                  {results.pages.map((page, i) => (
+                  {results.pages.map((page: PageData, i) => (
                     <tr key={page.pageNumber} className={i % 2 === 0 ? 'bg-gray-900' : 'bg-gray-800'}>
                       <td className="px-3 py-2 whitespace-nowrap text-sm font-medium text-white">
                         Page {page.pageNumber}
                       </td>
-                      {results.pages.map((otherPage) => {
+                      {results.pages.map((otherPage: PageData) => {
                         // Find similarity for this pair in the matrix
                         const pairData = results.similarityMatrix.find(
-                          p => (p.page1 === page.pageNumber && p.page2 === otherPage.pageNumber) ||
-                               (p.page2 === page.pageNumber && p.page1 === otherPage.pageNumber)
+                          (p: SimilarityPair) =>
+                            (p.page1 === page.pageNumber && p.page2 === otherPage.pageNumber) ||
+                            (p.page2 === page.pageNumber && p.page1 === otherPage.pageNumber)
                         );
                         
                         const similarity = page.pageNumber === otherPage.pageNumber ? 

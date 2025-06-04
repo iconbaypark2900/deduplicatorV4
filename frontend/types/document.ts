@@ -7,7 +7,8 @@
 export interface PageInfo {
     index: number;
     hash: string;
-    text: string;
+    text_snippet: string;
+    text?: string;
     medical_confidence?: number;
     duplicate_confidence?: number;
   }

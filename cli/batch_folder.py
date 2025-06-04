@@ -13,7 +13,11 @@ from typing import Optional, Dict, List
 from datetime import datetime
 
 from backend.services.deduplicator import DuplicateService
-from utils.duplicate_analysis import compute_document_hash, compute_document_embedding
+from utils.duplicate_analysis import (
+    compute_document_hash,
+    compute_document_tfidf_vector,
+)
+from similarity.engine import SimilarityEngine
 from ingestion.pdf_reader import extract_text_from_pdf
 from utils.config import settings
 
@@ -96,7 +100,7 @@ def batch_folder_check(folder_path: str, threshold: float = 0.9, output_path: Op
         if not text:
             continue
             
-        vector = compute_document_embedding(file)
+        vector = compute_document_tfidf_vector(file)
         if vector is None:
             logger.warning(f"Could not compute embedding for: {file}")
             continue
@@ -104,18 +108,21 @@ def batch_folder_check(folder_path: str, threshold: float = 0.9, output_path: Op
         file_vectors[doc_hash] = vector
     
     # Compare vectors
+    engine = SimilarityEngine()
     for i in range(len(unique_hashes)):
-        for j in range(i+1, len(unique_hashes)):
+        for j in range(i + 1, len(unique_hashes)):
             hash1 = unique_hashes[i]
             hash2 = unique_hashes[j]
-            
+
             # Skip if vectors not available
             if hash1 not in file_vectors or hash2 not in file_vectors:
                 continue
-                
+
             # Compute similarity
-            from similarity.search import compute_similarity
-            sim = compute_similarity(file_vectors[hash1], file_vectors[hash2])
+            sim = engine.compute_similarity(
+                file_vectors[hash1],
+                file_vectors[hash2],
+            )
             
             if sim > threshold:
                 # Add all pairwise combinations
