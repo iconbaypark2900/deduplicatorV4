@@ -60,13 +60,19 @@ export interface PageInfo {
     similarity: number;
   }
   
-  export interface UploadResponse {
+export interface UploadResponse {
     doc_id: string;
     status: string;
     match?: MatchDetails | null;
     pages: PageMetadata[];
     duplicates?: DuplicateMatch[];
-  }
+}
+
+export interface AsyncUploadResponse {
+  doc_id: string;
+  task_id: string;
+  status?: string;
+}
   
   export interface ReviewRequest {
     doc_id: string;

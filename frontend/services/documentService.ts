@@ -3,6 +3,7 @@ import {
   DocumentAnalysis,
   PageMetadata,
   UploadResponse,
+  AsyncUploadResponse,
   ReviewRequest,
   PageMetadataResponse,
   BatchFolderResponse,
@@ -17,7 +18,7 @@ export const documentService = {
   /**
    * Upload a single document for analysis
    */
-  async uploadDocument(file: File): Promise<UploadResponse> {
+  async uploadDocument(file: File): Promise<AsyncUploadResponse> {
     const formData = new FormData();
     formData.append('file', file);
     
@@ -145,7 +146,7 @@ export const documentService = {
 /**
  * Helper function for single document upload
  */
-export async function uploadSingle(file: File) {
+export async function uploadSingle(file: File): Promise<AsyncUploadResponse> {
   const form = new FormData();
   form.append("file", file);
   

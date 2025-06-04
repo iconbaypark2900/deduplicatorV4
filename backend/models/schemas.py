@@ -63,6 +63,14 @@ class UploadResponse(BaseModel):
     duplicates: List[DuplicatePair] = []
 
 
+class AsyncUploadResponse(BaseModel):
+    """Response returned when an upload is queued for async processing."""
+
+    doc_id: str
+    task_id: str
+    status: Optional[str] = "queued"
+
+
 class ReviewRequest(BaseModel):
     """
     Payload sent when a reviewer makes a decision.
