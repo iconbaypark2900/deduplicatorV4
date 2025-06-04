@@ -103,6 +103,7 @@ def process_document_pages( # Renamed from update_page_hash_map for clarity and 
             page_number=page_num,
             page_hash=page_hash_val,
             text_snippet=text[:300].replace("\n", " ").strip(),
+            full_page_text=text,
             medical_confidence=medical_confidences[page_num-1],
             duplicate_confidence=duplicate_confidences[page_num-1],
             page_image_path=image_paths[page_num-1], # type: ignore

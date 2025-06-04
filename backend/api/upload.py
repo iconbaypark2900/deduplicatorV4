@@ -8,7 +8,8 @@ import os
 import logging
 
 from backend.tasks.pipeline_tasks import process_document_task
-from backend.models.schemas import UploadTaskResponse
+from backend.models.schemas import AsyncUploadResponse
+from utils.config import settings, get_temp_path
 from utils.duplicate_analysis import compute_document_hash, compute_document_tfidf_vector
 from similarity.engine import SimilarityEngine
 from typing import List
@@ -22,7 +23,7 @@ router = APIRouter(tags=["Upload"])
 
 
 
-@router.post("/", response_model=UploadTaskResponse)
+@router.post("/", response_model=AsyncUploadResponse)
 async def upload_document(file: UploadFile = File(...)):
     """
     Upload a PDF and initiate background processing.
@@ -45,7 +46,7 @@ async def upload_document(file: UploadFile = File(...)):
     temp_path = None
     try:
         doc_id = str(uuid.uuid4())
-        temp_path = f"storage/tmp/{doc_id}_{file.filename}"
+        temp_path = get_temp_path(f"{doc_id}_{file.filename}")
 
         logger.debug(f"Saving uploaded file to {temp_path}")
         with open(temp_path, "wb") as f:
@@ -55,7 +56,7 @@ async def upload_document(file: UploadFile = File(...)):
         celery_task = process_document_task.delay(temp_path, file.filename, doc_id)
 
         logger.debug(f"Queued Celery task {celery_task.id} for {doc_id}")
-        return {"doc_id": doc_id, "task_id": celery_task.id}
+        return {"message": "File queued for processing", "doc_id": doc_id, "task_id": celery_task.id}
 
     except Exception as e:
         logger.error(f"Unexpected error: {str(e)}", exc_info=True)

@@ -75,6 +75,13 @@ class UploadTaskResponse(BaseModel):
     task_id: str
 
 
+class AsyncUploadResponse(BaseModel):
+    """Immediate response for asynchronous document upload."""
+    message: str
+    doc_id: str
+    task_id: str
+
+
 class ReviewRequest(BaseModel):
     """
     Payload sent when a reviewer makes a decision.
