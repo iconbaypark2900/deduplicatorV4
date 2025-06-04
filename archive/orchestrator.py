@@ -9,9 +9,12 @@ from similarity.hashing import compute_document_hash, get_minhash # For exact an
 # You'll need a way to access/query your LSH index (from similarity.hashing or a dedicated service)
 # from similarity.hashing import LSH_INDEX_SINGLETON # Placeholder
 from similarity.engine import SimilarityEngine # For TF-IDF vectorization
-from similarity.tfidf import tfidf_search # Or the engine's find_duplicate if it queries DB
-# We'll need a function to store TF-IDF vectors, e.g., from a modified similarity.tfidf or a new DB service
-# from .db_vector_store import store_tfidf_vector, get_all_tfidf_vectors # Placeholder for DB interaction
+from similarity.tfidf import (
+    tfidf_search,
+    insert_document_vector,
+)
+from utils.database import get_db, get_document_by_hash
+from utils.config import settings
 from utils.page_tracker import update_page_hash_map
 from backend.services.logger import log_system_event, log_upload # For logging
 # from backend.services.clustering_service import trigger_dbscan_update # Placeholder
@@ -74,17 +77,23 @@ class PipelineOrchestrator:
 
             # --- Stage 1: Exact Duplicate Check (Hash Check) ---
             logger.info(f"[{doc_id}] Stage 1: Performing exact hash check.")
-            doc_hash = compute_document_hash(pdf_path) # Uses the same extracted text implicitly
+            doc_hash = compute_document_hash(pdf_path)  # Uses the same extracted text implicitly
 
-            # TODO: Query database/hash_log for existing doc_hash
-            # existing_doc = check_exact_hash_in_db(doc_hash) # Placeholder
-            # if existing_doc:
-            #     logger.info(f"[{doc_id}] Exact duplicate found: {existing_doc['id']}. Marking as duplicate.")
-            #     processing_status["stages"]["exact_hash_check"] = f"Duplicate of {existing_doc['id']}"
-            #     update_document_status_in_db(doc_id, "exact_duplicate", matched_doc_id=existing_doc['id']) # Placeholder
-            #     log_upload(doc_id, original_filename, "exact_duplicate")
-            #     return {"status": "exact_duplicate", "matched_doc_id": existing_doc['id'], **processing_status}
-            processing_status["stages"]["exact_hash_check"] = "No exact match (placeholder logic)"
+            existing_doc = None
+            try:
+                with get_db() as db:
+                    existing_doc = get_document_by_hash(db, doc_hash)
+            except Exception as db_err:
+                logger.error(f"[{doc_id}] Error querying for existing hash: {db_err}")
+
+            if existing_doc and existing_doc.doc_id != doc_id:
+                logger.info(
+                    f"[{doc_id}] Exact duplicate found: {existing_doc.doc_id}. Marking as duplicate."
+                )
+                processing_status["stages"]["exact_hash_check"] = f"Duplicate of {existing_doc.doc_id}"
+                return {"status": "exact_duplicate", "matched_doc_id": existing_doc.doc_id, **processing_status}
+
+            processing_status["stages"]["exact_hash_check"] = "No exact match"
             # current_task_state['progress'] = 30
             # task_self.update_state(state='PROGRESS', meta=current_task_state)
 
@@ -107,29 +116,28 @@ class PipelineOrchestrator:
             logger.info(f"[{doc_id}] Stage 3: Computing TF-IDF vector and checking similarity.")
             tfidf_vector = self.similarity_engine.vectorize(full_text)
 
-            # TODO: Store tfidf_vector in PostgreSQL
-            # store_tfidf_vector(doc_id, original_filename, tfidf_vector, 'tfidf') # Placeholder for DB function
-            logger.info(f"[{doc_id}] TF-IDF vector computed and (conceptually) stored.")
-            processing_status["stages"]["tfidf_vectorization"] = "Completed"
-
-            # TODO: Compare against existing TF-IDF vectors in DB
-            # This would use a function similar to self.similarity_engine.find_duplicate,
-            # but that function (as per similarity.engine.py) currently queries a file-based corpus.
-            # It needs to be adapted to query the PostgreSQL DB of vectors.
-            # best_match_info = self.similarity_engine.find_duplicate(full_text, threshold=0.85) # Needs DB integration
-
-            # if best_match_info and best_match_info["status"] == "duplicate":
-            #     logger.info(f"[{doc_id}] TF-IDF duplicate found: {best_match_info['details']['matched_doc']} "
-            #                 f"with similarity {best_match_info['details']['similarity']:.4f}")
-            #     processing_status["stages"]["tfidf_similarity_check"] = f"Duplicate of {best_match_info['details']['matched_doc']}"
-            #     update_document_status_in_db(doc_id, "content_duplicate", matched_doc_id=best_match_info['details']['matched_doc']) # Placeholder
-            #     log_upload(doc_id, original_filename, "content_duplicate")
-            # else:
-            #     logger.info(f"[{doc_id}] No significant TF-IDF similarity found. Marking as unique.")
-            #     processing_status["stages"]["tfidf_similarity_check"] = "Unique"
-            #     update_document_status_in_db(doc_id, "unique") # Placeholder
-            #     log_upload(doc_id, original_filename, "unique")
-            processing_status["stages"]["tfidf_similarity_check"] = "Completed (placeholder logic)"
+            if tfidf_vector is not None:
+                try:
+                    with get_db() as db:
+                        insert_document_vector(db, doc_id, tfidf_vector)
+                    logger.info(f"[{doc_id}] TF-IDF vector stored in DB.")
+                    processing_status["stages"]["tfidf_vectorization"] = "Completed"
+                except Exception as vec_err:
+                    logger.error(f"[{doc_id}] Failed to store TF-IDF vector: {vec_err}")
+                    processing_status["stages"]["tfidf_vectorization"] = "Error storing vector"
+                
+                best_match_info = tfidf_search(tfidf_vector, threshold=settings.DOC_SIMILARITY_THRESHOLD)
+                if best_match_info and best_match_info.get("matched_doc") != doc_id:
+                    matched_doc = best_match_info["matched_doc"]
+                    sim_val = best_match_info["similarity"]
+                    processing_status["stages"]["tfidf_similarity_check"] = f"Duplicate of {matched_doc}"
+                    processing_status["matched_doc"] = matched_doc
+                    processing_status["similarity"] = sim_val
+                else:
+                    processing_status["stages"]["tfidf_similarity_check"] = "No similar document"
+            else:
+                processing_status["stages"]["tfidf_vectorization"] = "Vectorization failed"
+                processing_status["stages"]["tfidf_similarity_check"] = "Skipped"
             # current_task_state['progress'] = 80
             # task_self.update_state(state='PROGRESS', meta=current_task_state)
 
