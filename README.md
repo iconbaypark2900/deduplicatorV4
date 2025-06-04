@@ -113,6 +113,16 @@ The application will be available at:
 - Frontend: http://localhost:3000
 - API Documentation: http://localhost:8000/docs
 
+### Document Upload Workflow
+
+Uploading a document now triggers background processing using Celery. The `/upload` endpoint returns a JSON object containing the generated `doc_id` and the Celery `task_id`:
+
+```json
+{ "doc_id": "<document-id>", "task_id": "<celery-task-id>" }
+```
+
+Use the `doc_id` with `/documents/{doc_id}/analysis` to retrieve results once the task completes.
+
 ### Using the CLI Tools
 
 The CLI provides several commands for document analysis:

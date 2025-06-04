@@ -63,6 +63,12 @@ class UploadResponse(BaseModel):
     duplicates: List[DuplicatePair] = []
 
 
+class UploadTaskResponse(BaseModel):
+    """Response returned when a document upload initiates background processing."""
+    doc_id: str
+    task_id: str
+
+
 class ReviewRequest(BaseModel):
     """
     Payload sent when a reviewer makes a decision.

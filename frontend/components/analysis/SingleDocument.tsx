@@ -4,7 +4,7 @@ import React, { useState } from 'react';
 import UploadDropzone from '../core/UploadDropzone';
 import { documentService } from '../../services/documentService';
 import { getAbsoluteApiUrl } from '../../services/baseApi';
-import { UploadResponse, PageMetadata, DuplicateMatch } from '../../types/document';
+import { UploadResponse, PageMetadata, DuplicateMatch, UploadTaskResponse, DocumentAnalysis } from '../../types/document';
 import { ReviewData } from '../../types/review';
 import DirectImageDisplay from '../core/DirectImageDisplay';
 
@@ -30,54 +30,74 @@ export default function SingleDocument({ settings, onComplete }: Props) {
     const file = Array.isArray(files) ? files[0] : files;
     setIsLoading(true);
     setError(null);
-    
+
     try {
-      // First get basic document data
-      const result = await documentService.uploadDocument(file);
-      
-      // Add direct image URLs to each page using the same endpoint that works in the Review modal
-      // This mirrors how DocumentComparison processes image URLs
+      const task: UploadTaskResponse = await documentService.uploadDocument(file);
+
+      let analysis: DocumentAnalysis | null = null;
+      for (let i = 0; i < 20; i++) {
+        try {
+          await new Promise((r) => setTimeout(r, 2000));
+          analysis = await documentService.getAnalysis(task.doc_id);
+          if (analysis) break;
+        } catch {
+          /* Wait and retry */
+        }
+      }
+
+      if (!analysis) {
+        throw new Error('Timed out waiting for analysis');
+      }
+
+      const baseResult: UploadResponse = {
+        doc_id: analysis.doc_id,
+        status: analysis.status,
+        pages: analysis.pages.map((p) => ({
+          page_num: p.index + 1,
+          page_hash: p.hash,
+          text_snippet: p.text_snippet
+        })),
+        duplicates: analysis.duplicates
+      };
+
       const enhancedResult: UploadResponse = {
-        ...result,
-        pages: result.pages.map(page => ({
+        ...baseResult,
+        pages: baseResult.pages.map((page) => ({
           ...page,
           imageUrl: getAbsoluteApiUrl(`/page/${page.page_hash}/image`)
         }))
       };
-      
+
       setResults(enhancedResult);
-      
-      // If onComplete callback is provided, format data for review
-      if (onComplete && result.duplicates && result.duplicates.length > 0) {
-        const flaggedPages = result.duplicates.map(dup => {
-          // Store the image URLs directly in the flagged pages
-          // This is similar to how DocumentComparison attaches image URLs
-          const page1 = result.pages[dup.page1_idx];
-          const page2 = result.pages[dup.page2_idx];
-          
+
+      if (onComplete && analysis.duplicates && analysis.duplicates.length > 0) {
+        const flaggedPages = analysis.duplicates.map((dup) => {
+          const page1 = enhancedResult.pages[dup.page1_idx];
+          const page2 = enhancedResult.pages[dup.page2_idx];
+
           return {
             pageNumber: dup.page1_idx + 1,
             pageHash: page1.page_hash,
             similarity: dup.similarity,
-            imageUrl: getAbsoluteApiUrl(`/page/${page1.page_hash}/image`),
+            imageUrl: page1.imageUrl,
             matchedPage: {
               pageNumber: dup.page2_idx + 1,
-              documentId: result.doc_id,
+              documentId: analysis.doc_id,
               filename: file.name,
               pageHash: page2.page_hash,
-              imageUrl: getAbsoluteApiUrl(`/page/${page2.page_hash}/image`)
+              imageUrl: page2.imageUrl
             }
           };
         });
-        
+
         onComplete({
-          documentId: result.doc_id,
+          documentId: analysis.doc_id,
           filename: file.name,
           workflowType: 'single',
           flaggedPages,
           status: 'pending',
           reviewHistory: [],
-          duplicateConfidence: result.duplicates.length > 0 ? 0.8 : 0.2
+          duplicateConfidence: analysis.duplicates.length > 0 ? 0.8 : 0.2
         });
       }
     } catch (error) {

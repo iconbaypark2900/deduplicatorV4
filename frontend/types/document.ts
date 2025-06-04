@@ -67,6 +67,11 @@ export interface PageInfo {
     pages: PageMetadata[];
     duplicates?: DuplicateMatch[];
   }
+
+  export interface UploadTaskResponse {
+    doc_id: string;
+    task_id: string;
+  }
   
   export interface ReviewRequest {
     doc_id: string;
