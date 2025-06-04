@@ -103,6 +103,14 @@ class DocumentStatusUpdate(BaseModel):
     notes: Optional[str] = None
 
 
+class DocumentStatusResponse(BaseModel):
+    """Status information for an uploaded document."""
+    doc_id: str
+    status: Optional[str] = None
+    task_state: Optional[str] = None
+    message: Optional[str] = None
+
+
 class RebuildRequest(BaseModel):
     """
     Request to rebuild a document from selected pages.
