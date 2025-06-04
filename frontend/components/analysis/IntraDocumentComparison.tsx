@@ -1,7 +1,6 @@
 'use client';
 
 import React, { useState } from 'react';
-import UploadDropzone from '../core/UploadDropzone';
 import { documentService } from '../../services/documentService';
 import { getAbsoluteApiUrl } from '../../services/baseApi';
 import type { ReviewData, FlaggedPage } from '../../types/review';
@@ -33,7 +32,7 @@ interface IntraComparisonResult {
  * IntraDocumentComparison component for comparing pages within a single document.
  */
 export default function IntraDocumentComparison({ onComplete }: Props) {
-  const [file, setFile] = useState<File | null>(null);
+  const [docId, setDocId] = useState<string>('');
   const [results, setResults] = useState<IntraComparisonResult | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -41,18 +40,10 @@ export default function IntraDocumentComparison({ onComplete }: Props) {
   // Set a fixed threshold of 80% (0.8)
   const threshold = 0.8;
 
-  // Handle file upload
-  const handleFileUpload = (files: File | File[]) => {
-    const file = Array.isArray(files) ? files[0] : files;
-    setFile(file);
-    setResults(null);
-    setError(null);
-  };
-
   // Analyze the document for internal similarities
   const handleAnalyze = async () => {
-    if (!file) {
-      setError('Please upload a document to analyze');
+    if (!docId) {
+      setError('Please enter a document ID');
       return;
     }
 
@@ -63,8 +54,8 @@ export default function IntraDocumentComparison({ onComplete }: Props) {
       // Start the timer to track how long the analysis takes
       const startTime = Date.now();
       
-      // Perform the analysis
-      const result = await documentService.analyzeIntraDocument(file, threshold);
+      // Perform the analysis on stored document
+      const result = await documentService.analyzeStoredDocument(docId, threshold);
       
       // Calculate how long it took
       const processingTime = ((Date.now() - startTime) / 1000).toFixed(1);
@@ -115,15 +106,15 @@ export default function IntraDocumentComparison({ onComplete }: Props) {
           
           flaggedPages.push({
             pageNumber: pair.page1,
-            pageHash: `${file.name}_page${pair.page1}`, // Placeholder for actual hash
+            pageHash: `${docId}_page${pair.page1}`,
             similarity: pair.similarity,
             imageUrl: page1AbsoluteUrl,
             matchedPage: {
               pageNumber: pair.page2,
-              documentId: file.name,
-              filename: file.name,
+              documentId: docId,
+              filename: docId,
               imageUrl: page2AbsoluteUrl,
-              pageHash: `${file.name}_page${pair.page2}` // Add pageHash for fallback URL
+              pageHash: `${docId}_page${pair.page2}`
             }
           });
         }
@@ -131,8 +122,8 @@ export default function IntraDocumentComparison({ onComplete }: Props) {
         console.log('Flagged pages for review:', flaggedPages);
         
         onComplete({
-          documentId: `intra_${Date.now()}`,
-          filename: `Intra-Document Analysis: ${file.name}`,
+          documentId: docId,
+          filename: `Intra-Document Analysis: ${docId}`,
           workflowType: 'intra-compare',
           flaggedPages,
           status: 'pending',
@@ -175,22 +166,15 @@ export default function IntraDocumentComparison({ onComplete }: Props) {
   return (
     <div className="space-y-6">
       <div>
-        {/* Document upload */}
         <div className="bg-black text-white rounded-lg shadow p-6">
-          <h3 className="text-lg font-semibold mb-4">Upload Document</h3>
-          <UploadDropzone 
-            onUpload={handleFileUpload} 
-            mode="single"
-            label={file ? 'Replace document' : 'Upload document'}
-            sublabel="PDF file only"
+          <h3 className="text-lg font-semibold mb-4">Document ID</h3>
+          <input
+            type="text"
+            value={docId}
+            onChange={e => setDocId(e.target.value)}
+            className="w-full p-2 rounded text-black"
+            placeholder="Enter document ID"
           />
-          {file && (
-            <div className="mt-4 p-3 bg-gray-900 rounded-lg">
-              <p className="text-sm break-all">
-                {file.name} ({Math.round(file.size / 1024)} KB)
-              </p>
-            </div>
-          )}
         </div>
       </div>
 
@@ -198,9 +182,9 @@ export default function IntraDocumentComparison({ onComplete }: Props) {
       <div className="flex justify-center">
         <button
           onClick={handleAnalyze}
-          disabled={!file || isLoading}
+          disabled={!docId || isLoading}
           className={`px-6 py-3 rounded-lg font-medium ${
-            !file || isLoading
+            !docId || isLoading
               ? 'bg-gray-500 cursor-not-allowed'
               : 'bg-blue-600 hover:bg-blue-700'
           } text-white transition-colors`}

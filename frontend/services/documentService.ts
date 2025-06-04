@@ -117,6 +117,16 @@ export const documentService = {
     
     return response.data;
   },
+
+  /**
+   * Analyze stored document pages by doc_id
+   */
+  async analyzeStoredDocument(docId: string, threshold: number): Promise<any> {
+    const response = await api.get(`/documents/${docId}/analyze-internal-pages`, {
+      params: { threshold }
+    });
+    return response.data;
+  },
   
   /**
    * Rebuild a document using selected pages
