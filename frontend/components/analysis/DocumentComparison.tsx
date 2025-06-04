@@ -11,24 +11,22 @@ interface Props {
   onComplete?: (data: ReviewData) => void;
 }
 
+interface ComparisonPage {
+  pageNumber: number;
+  imageUrl: string;
+  similarity: number;
+}
+
 interface ComparisonResult {
   doc1: {
     text: string;
     filename: string;
-    pages: {
-      pageNumber: number;
-      imageUrl: string;
-      similarity: number;
-    }[];
+    pages: ComparisonPage[];
   };
   doc2: {
     text: string;
     filename: string;
-    pages: {
-      pageNumber: number;
-      imageUrl: string;
-      similarity: number;
-    }[];
+    pages: ComparisonPage[];
   };
   similarity: number;
 }
@@ -75,14 +73,14 @@ export default function DocumentComparison({ onComplete }: Props) {
       
       // Fix image URLs - convert relative URLs to absolute URLs
       if (result.doc1 && result.doc1.pages) {
-        result.doc1.pages = result.doc1.pages.map(page => ({
+        result.doc1.pages = result.doc1.pages.map((page: ComparisonPage) => ({
           ...page,
           imageUrl: getAbsoluteApiUrl(page.imageUrl)
         }));
       }
-      
+
       if (result.doc2 && result.doc2.pages) {
-        result.doc2.pages = result.doc2.pages.map(page => ({
+        result.doc2.pages = result.doc2.pages.map((page: ComparisonPage) => ({
           ...page,
           imageUrl: getAbsoluteApiUrl(page.imageUrl)
         }));
