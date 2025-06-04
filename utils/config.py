@@ -78,6 +78,7 @@ class Settings(BaseSettings):
     # OCR settings
     OCR_DPI: int = Field(default=300, env="OCR_DPI")
     OCR_LANGUAGE: str = Field(default="eng", env="OCR_LANGUAGE")
+    ENABLE_OCR: bool = Field(default=True, env="ENABLE_OCR")
     
     # Thumbnail generation
     THUMBNAIL_SIZE: tuple = Field(default=(200, 200))

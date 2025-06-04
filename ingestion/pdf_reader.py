@@ -18,7 +18,12 @@ from utils.config import settings
 logger = logging.getLogger(__name__)
 
 
-def extract_page_text(page: fitz.Page, ocr_dpi: int = settings.OCR_DPI) -> str:
+def extract_page_text(
+    page: fitz.Page,
+    ocr_dpi: int = settings.OCR_DPI,
+    attempt_ocr: bool = True,
+    min_length: int = settings.MIN_TEXT_LENGTH,
+) -> str:
     """
     Try different text extraction methods to get content from a page.
     
@@ -28,39 +33,38 @@ def extract_page_text(page: fitz.Page, ocr_dpi: int = settings.OCR_DPI) -> str:
     Returns:
         Extracted text from the page
     """
-    # Try different text extraction modes in order of preference
-    text = page.get_text("text")  # Basic text extraction
-    
-    if not text.strip():
-        logger.debug("Basic text extraction failed, trying HTML mode")
-        text = page.get_text("html")  # Try HTML mode which might catch more text
-        
-    if not text.strip():
-        logger.debug("HTML mode failed, trying JSON mode")
-        text = page.get_text("json")  # Try JSON mode which includes text blocks
-        
-    if not text.strip():
-        logger.debug("JSON mode failed, trying raw mode")
-        text = page.get_text("raw")  # Try raw mode as last resort
+    modes = ["text", "html", "json", "raw"]
+    text = ""
+    for mode in modes:
+        if mode != "text":
+            logger.debug(f"{mode.upper()} mode{' (fallback)' if text.strip() else ''}")
+        text = page.get_text(mode)
 
-    if not text.strip():
-        logger.debug("Raw mode failed, attempting OCR")
-        try:
-            pix = page.get_pixmap(dpi=ocr_dpi)
-            img_bytes = pix.tobytes("png")
-            image = Image.open(io.BytesIO(img_bytes))
-            text = pytesseract.image_to_string(image, lang=settings.OCR_LANGUAGE)
-        except Exception as e:
-            logger.error(
-                f"OCR failed on page {page.number + 1 if hasattr(page, 'number') else ''}: {e}"
-            )
-            text = ""
+        if attempt_ocr and len(text.strip()) < min_length:
+            try:
+                pix = page.get_pixmap(dpi=ocr_dpi)
+                img_bytes = pix.tobytes("png")
+                image = Image.open(io.BytesIO(img_bytes))
+                ocr_text = pytesseract.image_to_string(image, lang=settings.OCR_LANGUAGE)
+                if len(ocr_text.strip()) > len(text.strip()):
+                    text = ocr_text
+            except Exception as e:
+                logger.error(
+                    f"OCR failed on page {page.number + 1 if hasattr(page, 'number') else ''}: {e}"
+                )
+        if len(text.strip()) >= min_length:
+            break
 
     return text
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
-def extract_text_from_pdf(pdf_path: str, ocr_dpi: int = settings.OCR_DPI) -> str:
+def extract_text_from_pdf(
+    pdf_path: str,
+    ocr_dpi: int = settings.OCR_DPI,
+    attempt_ocr: bool = settings.ENABLE_OCR,
+    min_length: int = settings.MIN_TEXT_LENGTH,
+) -> str:
     """
     Extract and normalize text from entire PDF file.
     
@@ -79,7 +83,12 @@ def extract_text_from_pdf(pdf_path: str, ocr_dpi: int = settings.OCR_DPI) -> str
         texts = []
         
         for page in doc:
-            text = extract_page_text(page, ocr_dpi=ocr_dpi)
+            text = extract_page_text(
+                page,
+                ocr_dpi=ocr_dpi,
+                attempt_ocr=attempt_ocr,
+                min_length=min_length,
+            )
             if text.strip():
                 texts.append(text)
             else:
@@ -100,7 +109,12 @@ def extract_text_from_pdf(pdf_path: str, ocr_dpi: int = settings.OCR_DPI) -> str
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
-def extract_pages_from_pdf(pdf_path: str, ocr_dpi: int = settings.OCR_DPI) -> List[str]:
+def extract_pages_from_pdf(
+    pdf_path: str,
+    ocr_dpi: int = settings.OCR_DPI,
+    attempt_ocr: bool = settings.ENABLE_OCR,
+    min_length: int = settings.MIN_TEXT_LENGTH,
+) -> List[str]:
     """
     Extract and normalize text from PDF file page by page.
     
@@ -122,7 +136,12 @@ def extract_pages_from_pdf(pdf_path: str, ocr_dpi: int = settings.OCR_DPI) -> Li
         logger.debug(f"Found {page_count} pages in PDF")
         
         for i, page in enumerate(doc):
-            text = extract_page_text(page, ocr_dpi=ocr_dpi)
+            text = extract_page_text(
+                page,
+                ocr_dpi=ocr_dpi,
+                attempt_ocr=attempt_ocr,
+                min_length=min_length,
+            )
             logger.debug(f"Extracted {len(text)} characters from page {i+1}")
             
             if not text.strip():
@@ -148,7 +167,12 @@ def extract_pages_from_pdf(pdf_path: str, ocr_dpi: int = settings.OCR_DPI) -> Li
         raise
 
 
-def extract_pages_with_images(pdf_path: str) -> List[Dict]:
+def extract_pages_with_images(
+    pdf_path: str,
+    ocr_dpi: int = settings.OCR_DPI,
+    attempt_ocr: bool = settings.ENABLE_OCR,
+    min_length: int = settings.MIN_TEXT_LENGTH,
+) -> List[Dict]:
     """
     Extract text and image data from a PDF file.
     
@@ -167,7 +191,12 @@ def extract_pages_with_images(pdf_path: str) -> List[Dict]:
         
         for i, page in enumerate(doc):
             # Extract text
-            text = extract_page_text(page)
+            text = extract_page_text(
+                page,
+                ocr_dpi=ocr_dpi,
+                attempt_ocr=attempt_ocr,
+                min_length=min_length,
+            )
             normalized_text = normalize_medical_text(text) if text.strip() else ""
             
             # Extract images as PNG data
@@ -208,7 +237,12 @@ def extract_pages_with_images(pdf_path: str) -> List[Dict]:
         raise
 
 
-def iter_pages(path: str) -> Generator[str, None, None]:
+def iter_pages(
+    path: str,
+    ocr_dpi: int = settings.OCR_DPI,
+    attempt_ocr: bool = settings.ENABLE_OCR,
+    min_length: int = settings.MIN_TEXT_LENGTH,
+) -> Generator[str, None, None]:
     """
     Generator that yields the text of each page from the PDF.
     Useful for streaming ingestion of huge files.
@@ -221,7 +255,12 @@ def iter_pages(path: str) -> Generator[str, None, None]:
     """
     with fitz.open(path) as doc:
         for page in doc:
-            yield extract_page_text(page)
+            yield extract_page_text(
+                page,
+                ocr_dpi=ocr_dpi,
+                attempt_ocr=attempt_ocr,
+                min_length=min_length,
+            )
 
 
 def get_pdf_metadata(pdf_path: str) -> Dict:
